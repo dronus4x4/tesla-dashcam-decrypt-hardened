@@ -20,7 +20,8 @@ enum Launcher {
 
     private static func checkInstallation() throws {
         let manager = FileManager.default
-        let temp = manager.temporaryDirectory.resolvingSymlinksInPath()
+        // Match normal user-selected output paths and avoid macOS /var aliases.
+        let temp = manager.homeDirectoryForCurrentUser.resolvingSymlinksInPath()
             .appendingPathComponent("tesla-install-check-" + UUID().uuidString)
         let input = temp.appendingPathComponent("input")
         let output = temp.appendingPathComponent("output")
