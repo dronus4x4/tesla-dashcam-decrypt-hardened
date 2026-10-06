@@ -10,7 +10,7 @@ enum Launcher {
                 try checkInstallation()
                 print("Native app resource and Python worker checks passed.")
             } catch {
-                fputs("App installation check failed.\n", stderr)
+                print("App installation check failed: \(error)")
                 exit(1)
             }
         } else {
@@ -29,14 +29,16 @@ enum Launcher {
         let worker = Bundle.module.resourceURL!.appendingPathComponent("Resources/gui_bridge.py")
         let python = Bundle.main.resourceURL!.appendingPathComponent("python-runtime/bin/python3")
         guard manager.fileExists(atPath: worker.path), manager.isExecutableFile(atPath: python.path) else {
+            print("Worker resource: \(worker.path), exists: \(manager.fileExists(atPath: worker.path))")
+            print("Python runtime: \(python.path), executable: \(manager.isExecutableFile(atPath: python.path))")
             throw NSError(domain: "TeslaInstallCheck", code: 1)
         }
-        let process = Process(), stdout = Pipe()
+        let process = Process(), stdout = Pipe(), stderr = Pipe()
         process.executableURL = python
         process.arguments = [worker.path, input.path, output.path, "--scan"]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = stdout
-        process.standardError = FileHandle.nullDevice
+        process.standardError = stderr
         try process.run()
         let data = stdout.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
@@ -44,6 +46,9 @@ enum Launcher {
               let result = String(data: data, encoding: .utf8),
               result.contains("\"kind\": \"scan\""),
               !manager.fileExists(atPath: output.path) else {
+            print("Offline worker exit: \(process.terminationStatus)")
+            print(String(data: data, encoding: .utf8) ?? "No output")
+            print(String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
             throw NSError(domain: "TeslaInstallCheck", code: 2)
         }
     }
