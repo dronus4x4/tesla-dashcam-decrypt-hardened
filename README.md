@@ -2,6 +2,10 @@
 
 Based on [XGxF3/tesla-dashcam-decrypt](https://github.com/XGxF3/tesla-dashcam-decrypt), upstream commit `aceb414dd1c54d558a921414bd8883fe97c8ba24`. Retains the upstream AES/eCryptfs page algorithm and ownership-metadata layout. Unofficial software, not affiliated with Tesla.
 
+## macOS graphical app
+
+The first native Mac interface is in [macos/](macos/README.md): drive and destination pickers, offline scan, temporary Tesla sign-in, hidden token fallback, batch progress and cancellation. See its README to build the local development `.app`. Embedded Tesla sign-in and real recordings still require testing on your Mac; this is not a portable/notarized release or an iOS app.
+
 ## Mac setup
 
 Python 3.10+ required. Use an APFS output directory, such as a folder under your Mac's Movies directory. Input can remain on the Tesla USB. Output uses hardlinks to publish atomically; filesystems without that support fail safely. POSIX permissions do not protect plaintext on filesystems that ignore them.

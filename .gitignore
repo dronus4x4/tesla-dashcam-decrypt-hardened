@@ -32,3 +32,8 @@ TeslaCam/
 *.mp4
 *.MP4
 .tesla-*
+
+# Swift package and locally built Mac app
+macos/.build/
+macos/.swiftpm/
+macos/dist/

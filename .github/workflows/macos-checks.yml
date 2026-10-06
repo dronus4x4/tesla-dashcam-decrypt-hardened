@@ -1,0 +1,29 @@
+name: macOS GUI checks
+on:
+  push:
+    branches: [main, macos-gui]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact commit
+        shell: bash
+        run: |
+          git init source
+          git -C source remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git -C source fetch --depth 1 origin "$GITHUB_SHA"
+          git -C source checkout --detach FETCH_HEAD
+      - name: Test Python engine and GUI bridge
+        working-directory: source
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -r requirements.txt
+          .venv/bin/python -m unittest -v test_hardening test_gui_bridge
+      - name: Compile native interface and assemble local app
+        working-directory: source
+        run: bash macos/scripts/build-app.sh
