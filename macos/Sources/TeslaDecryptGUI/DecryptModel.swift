@@ -75,13 +75,17 @@ final class DecryptModel: ObservableObject {
         job.standardOutput = stdout
         job.standardError = stderr
         // Never display raw stderr; the bridge sends sanitized errors as JSON.
-        stderr.fileHandleForReading.readabilityHandler = { handle in _ = handle.availableData }
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            if handle.availableData.isEmpty { handle.readabilityHandler = nil }
+        }
         let eventReader = EventReader { [weak self] event in
             Task { @MainActor in self?.receive(event) }
         }
         reader = eventReader
         stdout.fileHandleForReading.readabilityHandler = { handle in
-            eventReader.append(handle.availableData)
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil }
+            else { eventReader.append(data) }
         }
         job.terminationHandler = { [weak self] task in
             Task { @MainActor in

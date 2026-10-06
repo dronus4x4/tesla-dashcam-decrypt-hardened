@@ -25,7 +25,7 @@ class GUIBridgeTests(unittest.TestCase):
 
     def test_offline_scan_json_and_no_writes(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             source = root / "source"
             source.mkdir()
             fixture(source / "clip.mp4")

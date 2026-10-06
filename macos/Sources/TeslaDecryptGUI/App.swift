@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
+@MainActor
 struct TeslaDecryptApp: App {
     @StateObject private var model = DecryptModel()
     var body: some Scene {
@@ -12,6 +13,7 @@ struct TeslaDecryptApp: App {
     }
 }
 
+@MainActor
 struct ContentView: View {
     @ObservedObject var model: DecryptModel
     @State private var showSignIn = false

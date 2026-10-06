@@ -40,7 +40,8 @@ def fixture(path, key=KEY, key_id=1, media=MP4):
 class HardeningTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        # macOS /var is a system symlink; use the canonical temp directory.
+        self.root = Path(self.temp.name).resolve()
         self.src = self.root / 'src.mp4'
         self.dst = self.root / 'out' / 'result.mp4'
         fixture(self.src)
