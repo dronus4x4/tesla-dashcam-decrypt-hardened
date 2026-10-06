@@ -28,6 +28,7 @@ import base64
 import hashlib
 import getpass
 import os
+import shutil
 import tempfile
 import warnings
 import subprocess
@@ -390,6 +391,40 @@ def collision_safe_batches(items, size):
         yield batch
 
 
+def safe_replace(src: Path, key: bytes, expected_header=None) -> int:
+    """Validate a same-directory temporary MP4 before replacing its source.
+
+    Does not require hardlinks (unlike separate-output publishing), and does
+    not chmod source directories. Power-loss guarantees depend on the USB FS.
+    """
+    if src.is_symlink() or not src.is_file():
+        raise ValueError("Source must be a regular file")
+    before = src.stat()
+    if expected_header is not None and read_file_header(src) != expected_header:
+        raise ValueError("Source header changed after scanning; scan again")
+    target_size = _read_real_plaintext_size(src)
+    if shutil.disk_usage(src.parent).free < target_size:
+        raise ValueError("USB needs enough free space for one decrypted clip")
+    fd, name = tempfile.mkstemp(prefix=".tesla-", suffix=".mp4", dir=src.parent)
+    os.close(fd)
+    tmp = Path(name)
+    try:
+        written = _decrypt_real_file(src, tmp, key)
+        validate_mp4(tmp)
+        with tmp.open("rb") as output:
+            os.fsync(output.fileno())
+        current = src.stat()
+        identity = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+        if src.is_symlink() or identity(current) != identity(before):
+            raise ValueError("Source changed during decryption; scan again")
+        os.utime(tmp, ns=(before.st_atime_ns, before.st_mtime_ns))
+        # Single same-filesystem replacement: originals are never unlinked first.
+        os.replace(tmp, src)
+        return written
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def find_encrypted_files(root: Path) -> list[Path]:
     """Discover regular MP4s without following directory/file symlinks."""
     found = []
@@ -420,32 +455,40 @@ def prompt_token():
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Decrypt Tesla clips locally with safe outputs")
     parser.add_argument("input_dir", type=Path)
-    parser.add_argument("output_dir", type=Path)
+    parser.add_argument("output_dir", type=Path, nargs="?")
+    parser.add_argument("--replace-originals", action="store_true",
+                        help="Replace validated encrypted clips in place; no encrypted backup kept")
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--dry-run", "--scan", dest="dry_run", action="store_true",
                         help="Offline scan; no token prompt, API calls or output writes")
     parser.add_argument("--remux", action="store_true", help="Remux using installed ffmpeg")
     args = parser.parse_args(argv)
+    if args.replace_originals and (args.output_dir is not None or args.remux):
+        parser.error("--replace-originals takes no output directory and cannot be combined with --remux")
+    if not args.replace_originals and args.output_dir is None:
+        parser.error("provide an output directory, or explicitly select --replace-originals")
     if not 1 <= args.batch_size <= 100:
         parser.error("batch size must be between 1 and 100")
     root = args.input_dir.expanduser().resolve(strict=True)
     if not root.is_dir():
         parser.error("input must be a directory")
     # Inspect the lexical destination before resolve() can hide symlinks.
-    output = Path(os.path.abspath(args.output_dir.expanduser()))
-    if any(p.is_symlink() for p in (output, *output.parents)):
-        parser.error("output path must not contain symlinks")
-    output = output.resolve()
-    if output == root or output in root.parents or root in output.parents:
-        parser.error("input and output directory trees must not overlap")
+    output = None
+    if not args.replace_originals:
+        output = Path(os.path.abspath(args.output_dir.expanduser()))
+        if any(p.is_symlink() for p in (output, *output.parents)):
+            parser.error("output path must not contain symlinks")
+        output = output.resolve()
+        if output == root or output in root.parents or root in output.parents:
+            parser.error("input and output directory trees must not overlap")
     counts = dict(examined=0, encrypted=0, plaintext=0, existing=0,
-                  keys=0, decrypted=0, failed=0, pending=0)
+                  keys=0, decrypted=0, replaced=0, failed=0, pending=0)
     items = []
     all_files = find_encrypted_files(root)
     for src in all_files:
         counts["examined"] += 1
         rel = src.relative_to(root)
-        dst = output / rel
+        dst = src if args.replace_originals else output / rel
         try:
             with src.open("rb") as f:
                 probe = f.read(CHUNK_SIZE)
@@ -461,6 +504,9 @@ def main(argv=None):
                 raise ValueError("Truncated encrypted payload")
             header = read_file_header(src)
             counts["encrypted"] += 1
+            if args.replace_originals:
+                items.append((header, src, src))
+                continue
             if any(p.is_symlink() for p in (dst, *dst.parents)):
                 raise ValueError("Destination contains a symlink")
             if dst.exists():
@@ -479,6 +525,8 @@ def main(argv=None):
     print("Scan:", counts)
     if args.dry_run or not items:
         return 1 if counts["failed"] else 0
+    if args.replace_originals:
+        print("Replacement mode: validated plaintext will replace encrypted clips; no encrypted backup is kept.")
     print("Footage stays local. Tesla receives clip ID, VIN, key ID, timestamp, wrapped key and public key.")
     token = prompt_token()
     session = get_session(token)
@@ -502,7 +550,11 @@ def main(argv=None):
                 counts["keys"] += 1
                 try:
                     # No persistent key cache. All outputs start as private temps.
-                    safe_output(src, dst, key, args.remux, output)
+                    if args.replace_originals:
+                        safe_replace(src, key, expected_header=header)
+                        counts["replaced"] += 1
+                    else:
+                        safe_output(src, dst, key, args.remux, output)
                     counts["decrypted"] += 1
                     print(f"Decrypted {str(src.relative_to(root))!r}")
                 except (OSError, ValueError, subprocess.SubprocessError):

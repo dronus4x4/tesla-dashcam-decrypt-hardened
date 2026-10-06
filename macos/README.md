@@ -96,15 +96,27 @@ This is a local development app. The build script creates a Python virtual envir
 
 1. Plug in your Tesla USB/SSD.
 2. **Select Tesla drive**: choose the drive or its TeslaCam folder.
-3. **Select destination**: choose a new separate folder on your Mac's APFS disk.
+3. Choose the output mode: leave **Replace encrypted clips on the USB** off and select a destination on your Mac, or turn it on to replace files on the selected drive.
 4. **Scan drive**: offline inventory; no token or network request.
 5. **Sign in with Tesla**: sign into Tesla's real Dashcam website in a temporary WebKit window. Select one encrypted clip there so the website makes its normal key request. The app observes the Bearer header on that exact decryption endpoint and keeps the token in memory.
-6. **Decrypt all**: batch processing, progress and results.
-7. Play one result before trusting a large archive. **Show destination** opens Finder.
+6. **Decrypt all**: batch processing, progress and results. USB replacement mode asks you to confirm the selected folder and clip count first.
+7. **Show destination** opens the output folder or selected drive. Safely eject the drive when finished.
 
 The app does not generate a Tesla credential independently. Tesla issues the token when you authenticate. Embedded sign-in, MFA/passkeys, the web file picker and automatic token capture require real-Mac/live-Tesla testing; website changes or Tesla restrictions can break them. No endpoint or login bypass is implemented.
 
 If embedded sign-in fails, use the official dashcam site in your normal browser and paste its temporary token into the app's **Paste a temporary token instead** secure field. This fallback still requires extracting a token from browser developer tools as described in the root README.
+
+## Replacing encrypted clips on the USB
+
+The checkbox is **off by default**. Changing output mode resets the scan, so scan again before decrypting.
+
+Each encrypted clip is decrypted into a temporary file in the same folder. The app validates the MP4, flushes it and replaces the encrypted file at its original path. Filenames, folder placement and timestamps are preserved. Failures before replacement leave the original encrypted clip intact. Completed replacements remain readable if a later clip fails or you cancel; already-readable MP4s are skipped when you run again.
+
+No separate destination or hardlinks are needed, so a writable exFAT Tesla drive can be used. The drive needs free space for one temporary decrypted clip at a time.
+
+**No encrypted backup is kept.** Copy the drive first if you want one. Keep the USB connected while processing and safely eject it afterwards. Power loss or unexpected removal can still corrupt a USB filesystem; normal error handling cannot provide a power-loss guarantee.
+
+The app does not rewrite Tesla's event metadata or move clips between folders. Playback in the car's viewer after replacement is unverified; this does not promise to reproduce every part of Tesla's in-car unlock operation.
 
 ## Security and implementation
 
@@ -113,7 +125,7 @@ If embedded sign-in fails, use the official dashcam site in your normal browser 
 - Token removed from the GUI after it is passed to a decryption job. A new sign-in/token is needed for another job. Python/Swift cannot guarantee erasure from memory.
 - Temporary WebKit cookie storage; no persistent login or token cache. The page's token is observed only from the exact HTTPS Tesla Dashcam batch endpoint and main frame. No form/password/MFA-field inspection.
 - Navigation allowed only to HTTPS Tesla domains. Third-party identity/verification pages may therefore fail; use the browser fallback instead of relaxing this silently.
-- Source files opened for reading. Output ownership, validation and atomic publishing follow the engine's safeguards.
+- Sources remain read-only in separate-output mode. Optional replacement mode validates a same-directory temporary MP4 before replacing the original. Output permissions on exFAT depend on the filesystem and mount settings.
 - Cancel signals the worker to clean up active temporary files; completed outputs remain.
 - Last 500 progress messages remain in the UI only and can include local filenames. No analytics or remote server.
 - The app is not sandboxed in this initial build. Folder pickers and scope lifetimes prepare for later sandboxing, but do not enforce least-privilege filesystem access in this build.

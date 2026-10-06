@@ -7,6 +7,7 @@ final class DecryptModel: ObservableObject {
     @Published var input: URL?
     @Published var output: URL?
     @Published var token = ""
+    @Published var replaceOriginals = false
     @Published var status = "Select your Tesla drive and a destination, then scan."
     @Published var log: [String] = []
     @Published var scanDescription = "Scan is offline."
@@ -19,7 +20,13 @@ final class DecryptModel: ObservableObject {
     private var handled = 0
     private var inputScope = false
     private var outputScope = false
-    var hasFolders: Bool { input != nil && output != nil }
+    var hasFolders: Bool { input != nil && (replaceOriginals || output != nil) }
+    var resultFolder: URL? { replaceOriginals ? input : output }
+
+    func modeChanged() {
+        pending = 0
+        scanDescription = "Output mode changed — scan again."
+    }
 
     func pickFolder(input choosingInput: Bool) {
         let panel = NSOpenPanel()
@@ -43,13 +50,15 @@ final class DecryptModel: ObservableObject {
     }
 
     func run(scan: Bool) {
-        guard !busy, let input, let output else { return }
-        let resources = WorkerResources.directory
+        guard !busy, hasFolders, let input else { return }
+        var workerArguments = [WorkerResources.directory.appendingPathComponent("gui_bridge.py").path, input.path]
+        if replaceOriginals { workerArguments.append("--replace-originals") }
+        else if let output { workerArguments.append(output.path) }
         let python = Bundle.main.resourceURL?.appendingPathComponent("python-runtime/bin/python3")
         let job = Process()
         if let python, FileManager.default.isExecutableFile(atPath: python.path) {
             job.executableURL = python
-            job.arguments = [resources.appendingPathComponent("gui_bridge.py").path, input.path, output.path]
+            job.arguments = workerArguments
         } else {
             // Development with swift run: supply the tested virtual environment.
             guard let path = ProcessInfo.processInfo.environment["TESLA_GUI_PYTHON"],
@@ -58,7 +67,7 @@ final class DecryptModel: ObservableObject {
                 return
             }
             job.executableURL = URL(fileURLWithPath: path)
-            job.arguments = [resources.appendingPathComponent("gui_bridge.py").path, input.path, output.path]
+            job.arguments = workerArguments
         }
         if scan { job.arguments!.append("--scan") }
         var environment = ProcessInfo.processInfo.environment
@@ -137,7 +146,7 @@ final class DecryptModel: ObservableObject {
                 status = "Scan complete: \(pending) clips ready."
             } else {
                 fraction = 1
-                status = "\(counts["decrypted", default: 0]) decrypted · \(counts["keys", default: 0]) keys obtained · \(counts["failed", default: 0]) failed · \(counts["existing", default: 0]) skipped"
+                status = "\(counts["decrypted", default: 0]) decrypted · \(counts["replaced", default: 0]) replaced · \(counts["failed", default: 0]) failed · \(counts["existing", default: 0]) skipped"
                 log.append(status)
             }
         }

@@ -16,6 +16,7 @@ struct TeslaDecryptApp: App {
 struct ContentView: View {
     @ObservedObject var model: DecryptModel
     @State private var showSignIn = false
+    @State private var confirmReplacement = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -38,6 +39,12 @@ struct ContentView: View {
                         Button("Select destination…") { model.pickFolder(input: false) }
                         Text(model.output?.path ?? "Choose a separate folder on your Mac")
                             .lineLimit(1).truncationMode(.middle)
+                    }.disabled(model.replaceOriginals)
+                    Toggle("Replace encrypted clips on the USB", isOn: $model.replaceOriginals)
+                        .onChange(of: model.replaceOriginals) { _ in model.modeChanged() }
+                    if model.replaceOriginals {
+                        Text("Decrypted clips replace the encrypted originals. No encrypted backup is kept. The USB needs room for one temporary clip.")
+                            .font(.caption).foregroundStyle(.orange)
                     }
                 }.padding(8)
             }.disabled(model.busy)
@@ -64,12 +71,15 @@ struct ContentView: View {
                 }.padding(8)
             }.disabled(model.busy)
             HStack {
-                Button("Decrypt all") { model.run(scan: false) }
+                Button("Decrypt all") {
+                    if model.replaceOriginals { confirmReplacement = true }
+                    else { model.run(scan: false) }
+                }
                     .buttonStyle(.borderedProminent)
                     .disabled(model.busy || !model.hasFolders || model.token.isEmpty || model.pending == 0)
                 if model.busy { Button("Cancel") { model.cancel() } }
                 Spacer()
-                if let output = model.output {
+                if let output = model.resultFolder {
                     Button("Show destination") { NSWorkspace.shared.open(output) }
                 }
             }
@@ -79,10 +89,18 @@ struct ContentView: View {
                 Text(model.log.joined(separator: "\n")).font(.system(.caption, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
             }.frame(maxHeight: .infinity)
-            Text("Original clips are read only. Use an APFS destination. Keep originals until playback is checked.")
+            Text(model.replaceOriginals
+                 ? "Keep a separate backup if you need the encrypted originals. Safely eject the USB when finished."
+                 : "Original clips are read only. Use an APFS destination. Keep originals until playback is checked.")
                 .font(.caption).foregroundStyle(.secondary)
         }.padding(24)
         .onDisappear { model.cancel(); model.token = "" }
+        .alert("Replace encrypted clips on this USB?", isPresented: $confirmReplacement) {
+            Button("Replace encrypted clips", role: .destructive) { model.run(scan: false) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will replace \(model.pending) encrypted clips in \(model.input?.path ?? "the selected folder") with readable MP4s. Each clip is validated first. No encrypted backup is kept. Failed clips are not replaced.")
+        }
         .sheet(isPresented: $showSignIn) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Sign in at Tesla’s Dashcam website").font(.headline)

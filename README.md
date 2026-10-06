@@ -37,6 +37,21 @@ Obtain the temporary bearer token by signing into https://dashcam.tesla.com, loa
 
 `--batch-size N` defaults to 20 (range 1–100). `--remux` optionally uses your installed ffmpeg to losslessly remux after decryption. Remux output size can differ from the source's plaintext length, so resumed runs with `--remux` check structure rather than exact size.
 
+## Optional: replace encrypted files on the USB
+
+The GUI has a **Replace encrypted clips on the USB** checkbox, off by default. Select it, scan again, then confirm replacement when clicking **Decrypt all**. A separate output folder is not required in this mode.
+
+From Terminal:
+
+```bash
+python tesla_dashcam_decrypt.py /Volumes/TESLA/TeslaCam --replace-originals --scan
+python tesla_dashcam_decrypt.py /Volumes/TESLA/TeslaCam --replace-originals
+```
+
+Each clip decrypts into a temporary file beside its source. The temporary MP4 is validated and flushed before a same-filesystem replacement. Wrong keys, insufficient space and failures before replacement leave the encrypted source intact. Already-plaintext clips are skipped on subsequent scans. No hardlinks are required, so this mode supports writable exFAT USB drives. Keep the drive connected throughout and safely eject it afterwards.
+
+This changes the USB and keeps no encrypted backup. It requires free space for one temporary plaintext clip at a time. It preserves filenames, folders and timestamps, but does not rewrite Tesla event metadata; compatibility with the car's viewer is unverified. Filesystem corruption or power loss during a rename cannot be eliminated by the program, especially on non-journaled USB filesystems. Make a backup if you need recovery beyond the app's normal failure handling. This option cannot be combined with a destination folder or `--remux`.
+
 ## Changes
 
 - Hidden token prompt; no token logged or saved by the program.
@@ -49,7 +64,7 @@ Obtain the temporary bearer token by signing into https://dashcam.tesla.com, loa
 - Refuses malformed/truncated input and unsupported synthetic/unknown containers.
 - Checks first decrypted page for `ftyp`, then validates top-level MP4 box boundaries and required `moov`/`mdat` boxes.
 - Private temporary files; selected output directories restricted to `0700` and outputs to `0600`.
-- Validates before publishing, never overwrites existing outputs, cleans temporary files on normal exceptions/interruption.
+- Validates before publishing; separate-output mode never overwrites existing outputs. Optional `--replace-originals` replaces encrypted sources only after validation. Temporary files are cleaned on normal exceptions/interruption.
 - Existing files skipped only after MP4 checks (and expected length unless remuxing).
 - Reports examined/encrypted/plaintext/existing/keys/decrypted/failed/pending counts; exits nonzero on failures.
 - ffmpeg receives MP4-suffixed private temporary paths and explicit MP4 output format; network protocols disabled.
@@ -58,7 +73,7 @@ Obtain the temporary bearer token by signing into https://dashcam.tesla.com, loa
 
 Footage stays local. Tesla receives the clip ID, VIN, key ID, timestamp, wrapped key and public key, along with your bearer token. Decryption depends on Tesla's API and account authorization.
 
-Original clips are opened for reading only. Use a separate output directory on your Mac and retain originals until playback is verified. Already-plaintext input MP4s are counted and left in place, not copied.
+By default, original clips are opened for reading only and decrypted copies go to a separate destination. Optional `--replace-originals` replaces encrypted source files with validated plaintext at the same paths, with no encrypted backup. Keep a separate backup if originals must be retained. Already-plaintext input MP4s are counted and left in place, not copied.
 
 MP4 structure checks detect many wrong-key/corruption cases but are not cryptographic authentication, video decoding or proof of ownership/source identity. Existing-output checks cannot prove that a file belongs to a particular input. Use a fresh dedicated destination per USB archive. The filesystem protections assume no hostile same-user process races changing directories or inputs during a run. Root and processes running as your user can read secrets/plaintext. A kill or power loss can leave `.tesla-*` temporary files; delete those only after stopping the process.
 
