@@ -193,12 +193,18 @@ enum ClipCore {
             var current = parent
             while current.path != "/" {
                 if (try? current.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
-                    throw ClipError.invalid("Destination contains a symlink")
+                    // Apple's /var alias is used by file coordination on macOS/iOS.
+                    guard current.path == "/var", current.resolvingSymlinksInPath().path == "/private/var" else {
+                        throw ClipError.invalid("Destination contains a symlink")
+                    }
                 }
                 current.deleteLastPathComponent()
             }
             try fm.createDirectory(at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             if fm.fileExists(atPath: destination.path) {
+                guard (try destination.resourceValues(forKeys: [.isSymbolicLinkKey])).isSymbolicLink != true else {
+                    throw ClipError.invalid("Existing output is a symlink")
+                }
                 try validateMP4(destination)
                 let existing = try destination.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? -1
                 guard existing >= 0, UInt64(existing) == size else { throw ClipError.invalid("Existing output has the wrong size") }
