@@ -9,6 +9,8 @@ cmp ../tesla_dashcam_decrypt.py Sources/TeslaDecryptGUI/Resources/tesla_dashcam_
 swift build -c release
 MAC_BIN_DIR="$(swift build -c release --show-bin-path)"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
+mkdir -p "$APP_PATH/Contents/Resources/decrypt-worker"
+cp Sources/TeslaDecryptGUI/Resources/*.py "$APP_PATH/Contents/Resources/decrypt-worker/"
 cp "$MAC_BIN_DIR/TeslaDecryptGUI" "$APP_PATH/Contents/MacOS/"
 for MAC_RESOURCE_BUNDLE in "$MAC_BIN_DIR"/*.bundle; do
     if [ -d "$MAC_RESOURCE_BUNDLE" ]; then

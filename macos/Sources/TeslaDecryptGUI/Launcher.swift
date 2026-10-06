@@ -26,7 +26,7 @@ enum Launcher {
         let output = temp.appendingPathComponent("output")
         try manager.createDirectory(at: input, withIntermediateDirectories: true)
         defer { try? manager.removeItem(at: temp) }
-        let worker = Bundle.module.resourceURL!.appendingPathComponent("Resources/gui_bridge.py")
+        let worker = WorkerResources.directory.appendingPathComponent("gui_bridge.py")
         let python = Bundle.main.resourceURL!.appendingPathComponent("python-runtime/bin/python3")
         guard manager.fileExists(atPath: worker.path), manager.isExecutableFile(atPath: python.path) else {
             print("Worker resource: \(worker.path), exists: \(manager.fileExists(atPath: worker.path))")
@@ -51,5 +51,16 @@ enum Launcher {
             print(String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
             throw NSError(domain: "TeslaInstallCheck", code: 2)
         }
+    }
+}
+
+enum WorkerResources {
+    static var directory: URL {
+        if let packaged = Bundle.main.resourceURL?.appendingPathComponent("decrypt-worker"),
+           FileManager.default.fileExists(atPath: packaged.appendingPathComponent("gui_bridge.py").path) {
+            return packaged
+        }
+        // SwiftPM's copied Resources folder is already the bundle resourceURL.
+        return Bundle.module.resourceURL!
     }
 }

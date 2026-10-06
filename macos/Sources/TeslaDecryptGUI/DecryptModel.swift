@@ -44,7 +44,7 @@ final class DecryptModel: ObservableObject {
 
     func run(scan: Bool) {
         guard !busy, let input, let output else { return }
-        let resources = Bundle.module.resourceURL!.appendingPathComponent("Resources")
+        let resources = WorkerResources.directory
         let python = Bundle.main.resourceURL?.appendingPathComponent("python-runtime/bin/python3")
         let job = Process()
         if let python, FileManager.default.isExecutableFile(atPath: python.path) {
