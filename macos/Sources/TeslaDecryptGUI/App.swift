@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 
-@main
 @MainActor
 struct TeslaDecryptApp: App {
     @StateObject private var model = DecryptModel()

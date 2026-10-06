@@ -26,4 +26,6 @@ jobs:
           .venv/bin/python -m unittest -v test_hardening test_gui_bridge
       - name: Compile native interface and assemble local app
         working-directory: source
-        run: bash macos/scripts/build-app.sh
+        run: |
+          bash macos/scripts/build-app.sh
+          "macos/dist/Tesla Dashcam Decryptor.app/Contents/MacOS/TeslaDecryptGUI" --check-installation
