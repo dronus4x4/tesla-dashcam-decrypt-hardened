@@ -1,7 +1,7 @@
 name: macOS GUI checks
 on:
   push:
-    branches: [main, macos-gui]
+    branches: [main, macos-gui, usb-replacement]
   pull_request:
   workflow_dispatch:
 permissions:
