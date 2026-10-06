@@ -1,15 +1,15 @@
-name: macOS GUI checks
+name: iOS native checks
 on:
   push:
-    branches: [main, macos-gui, usb-replacement, ios-app]
+    branches: [main, ios-app]
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  macos:
-    runs-on: macos-14
-    timeout-minutes: 15
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - name: Check out exact commit
         shell: bash
@@ -18,14 +18,13 @@ jobs:
           git -C source remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
           git -C source fetch --depth 1 origin "$GITHUB_SHA"
           git -C source checkout --detach FETCH_HEAD
-      - name: Test Python engine and GUI bridge
+      - name: Install fixture dependencies
         working-directory: source
         run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install -r requirements.txt
-          .venv/bin/python -m unittest -v test_hardening test_gui_bridge test_replacement
-      - name: Compile native interface and assemble local app
+      - name: Native protocol tests and unsigned iOS build
         working-directory: source
         run: |
-          bash macos/scripts/build-app.sh
-          "macos/dist/Tesla Dashcam Decryptor.app/Contents/MacOS/TeslaDecryptGUI" --check-installation
+          xcodebuild -version
+          TESLA_TEST_PYTHON="$PWD/.venv/bin/python" bash ios/scripts/check.sh

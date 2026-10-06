@@ -431,8 +431,10 @@ def find_encrypted_files(root: Path) -> list[Path]:
     def failed(exc):
         raise exc
     for parent, directories, files in os.walk(root, followlinks=False, onerror=failed):
-        directories[:] = sorted(d for d in directories if not (Path(parent) / d).is_symlink())
+        directories[:] = sorted(d for d in directories if not d.startswith(".") and not (Path(parent) / d).is_symlink())
         for name in sorted(files):
+            if name.startswith("._"):
+                continue
             path = Path(parent) / name
             if path.suffix.lower() == ".mp4" and not path.is_symlink() and path.is_file():
                 found.append(path)

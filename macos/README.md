@@ -99,7 +99,7 @@ This is a local development app. The build script creates a Python virtual envir
 3. Choose the output mode: leave **Replace encrypted clips on the USB** off and select a destination on your Mac, or turn it on to replace files on the selected drive.
 4. **Scan drive**: offline inventory; no token or network request.
 5. **Sign in with Tesla**: sign into Tesla's real Dashcam website in a temporary WebKit window. Select one encrypted clip there so the website makes its normal key request. The app observes the Bearer header on that exact decryption endpoint and keeps the token in memory.
-6. **Decrypt all**: batch processing, progress and results. USB replacement mode asks you to confirm the selected folder and clip count first.
+6. **Decrypt all**: batch processing, progress and results. **Stop decrypting** or **Command + .** requests cleanup; wait for the worker to exit before ejecting. Quitting waits for worker cleanup. USB replacement mode asks you to confirm the selected folder and clip count first.
 7. **Show destination** opens the output folder or selected drive. Safely eject the drive when finished.
 
 The app does not generate a Tesla credential independently. Tesla issues the token when you authenticate. Embedded sign-in, MFA/passkeys, the web file picker and automatic token capture require real-Mac/live-Tesla testing; website changes or Tesla restrictions can break them. No endpoint or login bypass is implemented.
@@ -126,10 +126,10 @@ The app does not rewrite Tesla's event metadata or move clips between folders. P
 - Temporary WebKit cookie storage; no persistent login or token cache. The page's token is observed only from the exact HTTPS Tesla Dashcam batch endpoint and main frame. No form/password/MFA-field inspection.
 - Navigation allowed only to HTTPS Tesla domains. Third-party identity/verification pages may therefore fail; use the browser fallback instead of relaxing this silently.
 - Sources remain read-only in separate-output mode. Optional replacement mode validates a same-directory temporary MP4 before replacing the original. Output permissions on exFAT depend on the filesystem and mount settings.
-- Cancel signals the worker to clean up active temporary files; completed outputs remain.
+- Stop decrypting (also File menu / Command + .) signals the worker to clean up active temporary files; completed outputs remain. The button stays visible and is disabled when idle. Quitting waits for the worker to exit. Scans skip hidden system directories and Mac `._` metadata files.
 - Last 500 progress messages remain in the UI only and can include local filenames. No analytics or remote server.
 - The app is not sandboxed in this initial build. Folder pickers and scope lifetimes prepare for later sandboxing, but do not enforce least-privilege filesystem access in this build.
-- iOS is not included yet. This Mac version uses a Python subprocess; an iOS version needs a native Swift decryption engine plus Files/document-picker integration and mobile lifecycle work.
+- The [native iOS beta](../ios/README.md) uses Swift decryption and Files access. Device/USB and live Tesla authentication testing remain required.
 
 ## Checks
 

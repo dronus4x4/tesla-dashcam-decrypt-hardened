@@ -37,3 +37,7 @@ TeslaCam/
 macos/.build/
 macos/.swiftpm/
 macos/dist/
+
+ios/build/
+ios/*.xcarchive/
+**/xcuserdata/

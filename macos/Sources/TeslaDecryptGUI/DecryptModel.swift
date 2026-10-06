@@ -18,6 +18,8 @@ final class DecryptModel: ObservableObject {
     private var reader: EventReader?
     private var initialPending = 0
     private var handled = 0
+    private var quitCompletion: (() -> Void)?
+    private var stopping = false
     private var inputScope = false
     private var outputScope = false
     var hasFolders: Bool { input != nil && (replaceOriginals || output != nil) }
@@ -102,6 +104,16 @@ final class DecryptModel: ObservableObject {
             Task { @MainActor in
                 model.busy = false
                 model.process = nil
+                if model.stopping {
+                    model.pending = 0
+                    model.scanDescription = "Stopped — scan again to resume."
+                    model.status = "Stopped. The worker has exited; you can now eject the USB in Finder."
+                    model.stopping = false
+                }
+                if let completion = model.quitCompletion {
+                    model.quitCompletion = nil
+                    completion()
+                }
                 if code != 0 && code != 130 {
                     model.status = "Finished with errors. Review the results below and scan again before retrying."
                 }
@@ -131,8 +143,16 @@ final class DecryptModel: ObservableObject {
         }
     }
 
+    func stopBeforeQuit(_ completion: @escaping () -> Void) {
+        quitCompletion = completion
+        cancel()
+    }
+
     func cancel() {
-        process?.terminate() // Bridge turns SIGTERM into cleanup-aware interruption.
+        guard busy, let process, process.isRunning else { return }
+        guard !stopping else { return }
+        stopping = true
+        process.terminate() // Bridge turns SIGTERM into cleanup-aware interruption.
         status = "Stopping after cleanup…"
     }
 

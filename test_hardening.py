@@ -49,6 +49,13 @@ class HardeningTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_scan_ignores_mac_metadata_and_hidden_system_folders(self):
+        (self.root / '._clip.mp4').write_bytes(b'AppleDouble')
+        system = self.root / '.Spotlight-V100'
+        system.mkdir()
+        fixture(system / 'ignored.mp4')
+        self.assertEqual(d.find_encrypted_files(self.root), [self.src])
+
     def test_real_page_roundtrip_and_permissions(self):
         original = self.src.read_bytes()
         self.assertEqual(d.safe_output(self.src, self.dst, KEY), len(MP4))

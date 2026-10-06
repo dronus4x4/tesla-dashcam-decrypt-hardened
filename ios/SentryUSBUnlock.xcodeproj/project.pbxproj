@@ -1,0 +1,29 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+4411227784337DBB3AE28994 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App.swift"; sourceTree = "<group>"; };
+BFC09FD1105A3B877729B715 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ClipCore.swift"; sourceTree = "<group>"; };
+B07BC0EAA01FB986821BF56B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TeslaSignIn.swift"; sourceTree = "<group>"; };
+7B594B6DB375E1BF3F23CDD6 = { isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
+28AAD1477D5182D66D4B03B3 = { isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+26B2A637F7DC4079D5AB78A5 = { isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
+A249DDA19BB41A53BB8F2494 = { isa = PBXBuildFile; fileRef = 4411227784337DBB3AE28994; };
+38BF445BB88871EAB2891EDD = { isa = PBXBuildFile; fileRef = BFC09FD1105A3B877729B715; };
+B0694B702DAC756D8920C7CA = { isa = PBXBuildFile; fileRef = B07BC0EAA01FB986821BF56B; };
+993A6F0DC816349E9715E5C7 = { isa = PBXBuildFile; fileRef = 28AAD1477D5182D66D4B03B3; };
+4D41DD372D8E0FAD9BCA5A62 = { isa = PBXBuildFile; fileRef = 26B2A637F7DC4079D5AB78A5; };
+7D1043473D55BFA90E8530D3 = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SentryUSBUnlock.app; sourceTree = BUILT_PRODUCTS_DIR; };
+4D820FADAFBC7A1FCACC4F07 = { isa = PBXGroup; children = (4411227784337DBB3AE28994, BFC09FD1105A3B877729B715, B07BC0EAA01FB986821BF56B, 7B594B6DB375E1BF3F23CDD6, 28AAD1477D5182D66D4B03B3, 26B2A637F7DC4079D5AB78A5,); path = SentryUSBUnlock; sourceTree = "<group>"; };
+BFE00B156DCFC34C4751A6E5 = { isa = PBXGroup; children = (7D1043473D55BFA90E8530D3,); name = Products; sourceTree = "<group>"; };
+B28B7AF69320201D1CF206EB = { isa = PBXGroup; children = (4D820FADAFBC7A1FCACC4F07, BFE00B156DCFC34C4751A6E5,); sourceTree = "<group>"; };
+BCE16DD0260827ECF338C787 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A249DDA19BB41A53BB8F2494, 38BF445BB88871EAB2891EDD, B0694B702DAC756D8920C7CA,); runOnlyForDeploymentPostprocessing = 0; };
+0189424A5A60FED329FA868E = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (993A6F0DC816349E9715E5C7, 4D41DD372D8E0FAD9BCA5A62,); runOnlyForDeploymentPostprocessing = 0; };
+7561BFB015D8F536760CB671 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+89E1FD6268CC0F221A2BE178 = { isa = XCBuildConfiguration; name = Debug; buildSettings = { CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; }; };
+7082CC0B6FC1282FCEABD07A = { isa = XCBuildConfiguration; name = Debug; buildSettings = { CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; MARKETING_VERSION = 0.1.0; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = SentryUSBUnlock/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.dronusdrives.sentryusbunlock; PRODUCT_NAME = "$(TARGET_NAME)"; TARGETED_DEVICE_FAMILY = "1,2"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf; }; };
+E6DE6C99132752C914FEF632 = { isa = XCBuildConfiguration; name = Release; buildSettings = { CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; }; };
+639A7CA24D39909E713B47F7 = { isa = XCBuildConfiguration; name = Release; buildSettings = { CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; MARKETING_VERSION = 0.1.0; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = SentryUSBUnlock/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.dronusdrives.sentryusbunlock; PRODUCT_NAME = "$(TARGET_NAME)"; TARGETED_DEVICE_FAMILY = "1,2"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; }; };
+F8C70E4123C9AE82C42562CC = { isa = XCConfigurationList; buildConfigurations = (89E1FD6268CC0F221A2BE178, E6DE6C99132752C914FEF632,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+651ECA092BE81738918D8CDB = { isa = XCConfigurationList; buildConfigurations = (7082CC0B6FC1282FCEABD07A, 639A7CA24D39909E713B47F7,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+0E8A3AD980EC179856012B7E = { isa = PBXNativeTarget; buildConfigurationList = 651ECA092BE81738918D8CDB; buildPhases = (BCE16DD0260827ECF338C787, 7561BFB015D8F536760CB671, 0189424A5A60FED329FA868E,); buildRules = (); dependencies = (); name = SentryUSBUnlock; productName = SentryUSBUnlock; productReference = 7D1043473D55BFA90E8530D3; productType = "com.apple.product-type.application"; };
+98F54143AB4E86B28C3AFEE0 = { isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = { 0E8A3AD980EC179856012B7E = { CreatedOnToolsVersion = 16.0; }; }; }; buildConfigurationList = F8C70E4123C9AE82C42562CC; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base,); mainGroup = B28B7AF69320201D1CF206EB; productRefGroup = BFE00B156DCFC34C4751A6E5; projectDirPath = ""; projectRoot = ""; targets = (0E8A3AD980EC179856012B7E,); };
+}; rootObject = 98F54143AB4E86B28C3AFEE0; }

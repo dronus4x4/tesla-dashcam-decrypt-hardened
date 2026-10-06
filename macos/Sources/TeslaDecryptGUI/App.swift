@@ -3,12 +3,31 @@ import SwiftUI
 
 @MainActor
 struct TeslaDecryptApp: App {
+    @NSApplicationDelegateAdaptor(DecryptAppDelegate.self) private var appDelegate
     @StateObject private var model = DecryptModel()
     var body: some Scene {
         WindowGroup("Tesla Dashcam Decryptor") {
             ContentView(model: model)
+                .onAppear { appDelegate.model = model }
                 .frame(minWidth: 680, minHeight: 560)
         }
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Stop decrypting") { model.cancel() }
+                    .keyboardShortcut(".", modifiers: .command)
+                    .disabled(!model.busy)
+            }
+        }
+    }
+}
+
+@MainActor
+final class DecryptAppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: DecryptModel?
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model, model.busy else { return .terminateNow }
+        model.stopBeforeQuit { sender.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
     }
 }
 
@@ -77,7 +96,8 @@ struct ContentView: View {
                 }
                     .buttonStyle(.borderedProminent)
                     .disabled(model.busy || !model.hasFolders || model.token.isEmpty || model.pending == 0)
-                if model.busy { Button("Cancel") { model.cancel() } }
+                Button("Stop decrypting") { model.cancel() }
+                    .disabled(!model.busy)
                 Spacer()
                 if let output = model.resultFolder {
                     Button("Show destination") { NSWorkspace.shared.open(output) }

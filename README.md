@@ -82,3 +82,7 @@ Automated tests use generated eCryptfs-style fixtures and mocked HTTP responses.
 ## Attribution and licence
 
 Upstream README declares `MIT`. Upstream provides no separate LICENSE file or full copyright/permission notice at the pinned commit. The original README is retained as `README.upstream.md`, and `WRITEUP.md` is retained for attribution and provenance. No licence or copyright holder has been invented. Obtain the author's full MIT notice before a public release.
+
+## iPhone and iPad beta
+
+[Sentry USB Unlock 0.1.0 (build 1)](ios/README.md) provides a native Swift iOS project, USB folder selection, copy/replacement modes and TestFlight setup instructions. Device and live sign-in testing remain required.
