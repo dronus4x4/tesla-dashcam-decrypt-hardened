@@ -192,9 +192,10 @@ enum ClipCore {
             // Never write through a symlink, including a nested destination.
             var current = parent
             while current.path != "/" {
-                if (try? current.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+                if (try? fm.attributesOfItem(atPath: current.path)[.type] as? FileAttributeType) == .typeSymbolicLink {
                     // Apple's /var alias is used by file coordination on macOS/iOS.
-                    guard current.path == "/var", current.resolvingSymlinksInPath().path == "/private/var" else {
+                    let link = try fm.destinationOfSymbolicLink(atPath: current.path)
+                    guard current.path == "/var", link == "private/var" || link == "/private/var" else {
                         throw ClipError.invalid("Destination contains a symlink")
                     }
                 }
