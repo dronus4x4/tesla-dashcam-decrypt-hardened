@@ -24,3 +24,11 @@ venv/
 
 # Output files
 *.log
+
+# Footage and temporary plaintext
+EncryptedClips/
+DecryptedClips/
+TeslaCam/
+*.mp4
+*.MP4
+.tesla-*

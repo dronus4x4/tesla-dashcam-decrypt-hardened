@@ -1,2 +1,6 @@
-pycryptodome>=3.19.0
-requests>=2.31.0
+certifi==2026.7.22
+charset-normalizer==3.5.2
+idna==3.20
+pycryptodome==3.24.0
+requests==2.34.2
+urllib3==2.8.0

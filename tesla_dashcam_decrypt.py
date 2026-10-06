@@ -26,7 +26,10 @@ Getting your auth token:
 import argparse
 import base64
 import hashlib
-import json
+import getpass
+import os
+import tempfile
+import warnings
 import subprocess
 import struct
 import sys
@@ -69,6 +72,7 @@ WRAPPED_KEY_SIZE       = 44
 def get_session(token: str) -> requests.Session:
     """Build an authenticated requests session."""
     s = requests.Session()
+    s.trust_env = False  # Ignore environment proxies and .netrc credentials.
     s.headers.update({
         "Authorization": f"Bearer {token}",
         "Content-Type":  "application/json",
@@ -182,71 +186,40 @@ def fetch_keys_batch(session: requests.Session, file_headers: list[dict] | list[
     Returns a dict mapping uuid -> raw AES key bytes.
     """
     payload = {"items": [_api_item_from_header(header) for header in file_headers]}
-    resp = session.post(DECRYPT_BATCH_URL, json=payload, timeout=30)
-    resp.raise_for_status()
+    requested = {item['id'] for item in payload['items']}
+    if len(requested) != len(payload['items']):
+        raise ValueError('Duplicate IDs in API batch')
+    for attempt in range(4):
+        resp = session.post(DECRYPT_BATCH_URL, json=payload, timeout=(10, 30),
+                            allow_redirects=False)
+        if resp.status_code in (429, 502, 503, 504) and attempt < 3:
+            time.sleep(2 ** attempt)
+            continue
+        break
+    if resp.status_code != 200:
+        # Do not display response bodies, which may contain sensitive metadata.
+        raise RuntimeError(f'Tesla API returned HTTP {resp.status_code}')
 
     data = resp.json()
     keys = {}
-    for result in data.get("results", []):
+    if not isinstance(data, dict) or not isinstance(data.get('results'), list):
+        raise ValueError('Invalid API response structure')
+    seen = set()
+    for result in data['results']:
         uid = result["id"]
+        if uid not in requested or uid in seen:
+            raise ValueError('Unrequested or duplicate ID in API response')
+        seen.add(uid)
         if result.get("error"):
-            print(f"  [!] API error for {uid}: {result['error']}")
             continue
-        raw_key = base64.b64decode(result["key"])
+        raw_key = base64.b64decode(result["key"], validate=True)
+        if len(raw_key) != 16:
+            raise ValueError('Tesla key is not AES-128')
         keys[uid] = raw_key
     return keys
 
 
 # ── Decryption ─────────────────────────────────────────────────────────────────
-
-def decrypt_file(src: Path, dst: Path, key_bytes: bytes) -> int:
-    """
-    Decrypt a Tesla-encrypted .mp4 file.
-
-    Real Tesla files use a two-page header followed by 4096-byte encrypted
-    eCryptfs pages. Synthetic fixtures use a smaller IV-prefixed chunk format.
-
-    Returns number of bytes written.
-    """
-    dst.parent.mkdir(parents=True, exist_ok=True)
-
-    if _has_extended_header(src):
-        return _decrypt_real_file(src, dst, key_bytes)
-
-    written = 0
-
-    with open(src, "rb") as fin, open(dst, "wb") as fout:
-        # Synthetic fixtures start after 20 bytes.
-        fin.seek(20)
-
-        while True:
-            chunk = fin.read(FULL_CHUNK)
-            if not chunk:
-                break
-
-            if len(chunk) < HEADER_SIZE + 1:
-                # Last chunk may be partial — write as-is (shouldn't happen)
-                fout.write(chunk)
-                written += len(chunk)
-                break
-
-            iv          = chunk[:HEADER_SIZE]
-            ciphertext  = chunk[HEADER_SIZE:]
-
-            cipher      = AES.new(key_bytes, AES.MODE_CBC, iv)
-            plaintext   = cipher.decrypt(ciphertext)
-
-            # Strip PKCS7 padding on the last block only
-            if len(chunk) < FULL_CHUNK:
-                pad_len = plaintext[-1]
-                if 1 <= pad_len <= 16:
-                    plaintext = plaintext[:-pad_len]
-
-            fout.write(plaintext)
-            written += len(plaintext)
-
-    return written
-
 
 def _decrypt_real_file(src: Path, dst: Path, key_bytes: bytes) -> int:
     """
@@ -279,6 +252,8 @@ def _decrypt_real_file(src: Path, dst: Path, key_bytes: bytes) -> int:
             remaining = target_size - written
             if remaining < len(plaintext):
                 plaintext = plaintext[:remaining]
+            if page == 0:
+                check_ftyp(plaintext)
             fout.write(plaintext)
             written += len(plaintext)
             page += 1
@@ -293,6 +268,9 @@ def remux_mp4(src: Path, dst: Path) -> None:
     subprocess.run(
         [
             "ffmpeg",
+            "-nostdin",
+            "-protocol_whitelist",
+            "file",
             "-y",
             "-i",
             str(src),
@@ -300,173 +278,249 @@ def remux_mp4(src: Path, dst: Path) -> None:
             "copy",
             "-movflags",
             "faststart",
+            "-f",
+            "mp4",
             str(dst),
         ],
         check=True,
+        timeout=300,
         capture_output=True,
         text=True,
     )
 
 
-# ── File discovery ─────────────────────────────────────────────────────────────
+# Hardened local workflow; the paging algorithm above remains upstream-derived.
+
+def check_ftyp(data: bytes) -> None:
+    if len(data) < 16 or data[4:8] != b"ftyp":
+        raise ValueError("Decrypted data does not start with an MP4 ftyp box")
+    size = struct.unpack(">I", data[:4])[0]
+    if size < 16 or size > len(data) or (size - 16) % 4:
+        raise ValueError("Invalid MP4 ftyp box")
+
+
+def validate_mp4(path: Path) -> None:
+    """Check top-level MP4 box boundaries; not cryptographic authentication."""
+    length = path.stat().st_size
+    boxes = set()
+    with path.open("rb") as f:
+        check_ftyp(f.read(CHUNK_SIZE))
+        offset = 0
+        while offset < length:
+            f.seek(offset)
+            header = f.read(8)
+            if len(header) != 8:
+                raise ValueError("Truncated MP4 box")
+            size, kind = struct.unpack(">I4s", header)
+            minimum = 8
+            if size == 1:
+                extended = f.read(8)
+                if len(extended) != 8:
+                    raise ValueError("Truncated extended MP4 box")
+                size = struct.unpack(">Q", extended)[0]
+                minimum = 16
+            elif size == 0:
+                size = length - offset
+            if size < minimum or offset + size > length:
+                raise ValueError("MP4 box extends outside file")
+            boxes.add(kind)
+            offset += size
+    if not {b"ftyp", b"moov", b"mdat"}.issubset(boxes):
+        raise ValueError("MP4 is missing ftyp, moov or mdat")
+
+
+def private_directory(path: Path) -> None:
+    """Require real directories; restrict the selected output tree to its owner."""
+    if path.is_symlink():
+        raise ValueError("Output directories must not be symlinks")
+    if not path.exists():
+        private_directory(path.parent)
+        path.mkdir(mode=0o700)
+    if not path.is_dir():
+        raise ValueError("Output path is not a directory")
+
+
+def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None) -> int:
+    """Publish validated plaintext atomically without overwriting existing files."""
+    private_directory(dst.parent)
+    current = dst.parent
+    while True:
+        os.chmod(current, 0o700)
+        if output_root is None or current == output_root:
+            break
+        current = current.parent
+    fd, name = tempfile.mkstemp(prefix=".tesla-", suffix=".mp4", dir=dst.parent)
+    os.close(fd)
+    tmp = Path(name)
+    remux_tmp = None
+    try:
+        written = _decrypt_real_file(src, tmp, key)
+        validate_mp4(tmp)
+        if remux:
+            fd, name = tempfile.mkstemp(prefix=".tesla-remux-", suffix=".mp4", dir=dst.parent)
+            os.close(fd)
+            remux_tmp = Path(name)
+            remux_mp4(tmp, remux_tmp)
+            validate_mp4(remux_tmp)
+            tmp.unlink()
+            tmp = remux_tmp
+        os.chmod(tmp, 0o600)
+        with tmp.open("rb") as f:
+            os.fsync(f.fileno())
+        # APFS/ext4 support atomic, no-clobber hardlinks. Unsupported output
+        # filesystems fail safely; encrypted sources are always untouched.
+        os.link(tmp, dst)
+        return written
+    finally:
+        tmp.unlink(missing_ok=True)
+        if remux_tmp is not None:
+            remux_tmp.unlink(missing_ok=True)
+
+
+def collision_safe_batches(items, size):
+    batch, seen = [], set()
+    for item in items:
+        uid = item[0]["id"]
+        if len(batch) == size or uid in seen:
+            yield batch
+            batch, seen = [], set()
+        batch.append(item)
+        seen.add(uid)
+    if batch:
+        yield batch
+
 
 def find_encrypted_files(root: Path) -> list[Path]:
-    """
-    Walk a TeslaCam USB root and return all .mp4 files.
-    Tesla still uses the .mp4 extension for encrypted files.
-    """
+    """Discover regular MP4s without following directory/file symlinks."""
     found = []
-    for pattern in ("**/*.mp4", "**/*.MP4"):
-        found.extend(root.glob(pattern))
-    return sorted(set(found))
+    def failed(exc):
+        raise exc
+    for parent, directories, files in os.walk(root, followlinks=False, onerror=failed):
+        directories[:] = sorted(d for d in directories if not (Path(parent) / d).is_symlink())
+        for name in sorted(files):
+            path = Path(parent) / name
+            if path.suffix.lower() == ".mp4" and not path.is_symlink() and path.is_file():
+                found.append(path)
+    return sorted(found)
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+def prompt_token():
+    if not sys.stdin.isatty():
+        raise ValueError("Run in an interactive Terminal for secure token entry")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        token = getpass.getpass("Tesla Dashcam token (hidden): ").strip()
+    if token.startswith("Bearer "):
+        token = token[7:].strip()
+    if not token or any(c.isspace() or ord(c) < 33 or ord(c) > 126 for c in token):
+        raise ValueError("Invalid token format")
+    return token
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Batch-decrypt Tesla 2026.20+ encrypted dashcam files",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "input_dir",
-        type=Path,
-        help="Root of your TeslaCam USB drive (e.g. /Volumes/TESLA/TeslaCam)",
-    )
-    parser.add_argument(
-        "output_dir",
-        type=Path,
-        help="Where to write decrypted MP4 files (folder will be created)",
-    )
-    parser.add_argument(
-        "--token",
-        required=True,
-        help="Your Tesla Bearer token from dashcam.tesla.com (see instructions above)",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=20,
-        help="How many files to request keys for per API call (default: 20)",
-    )
-    parser.add_argument(
-        "--skip-existing",
-        action="store_true",
-        default=True,
-        help="Skip files that already exist in the output folder (default: on)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Discover files and fetch keys but don't write output",
-    )
-    parser.add_argument(
-        "--remux",
-        action="store_true",
-        help="Losslessly remux each decrypted MP4 with ffmpeg after decryption",
-    )
-    args = parser.parse_args()
 
-    if not args.input_dir.exists():
-        sys.exit(f"Error: input directory not found: {args.input_dir}")
-
-    print(f"\n🔍  Scanning {args.input_dir} for encrypted dashcam files…")
-    all_files = find_encrypted_files(args.input_dir)
-    if not all_files:
-        sys.exit("No .mp4 files found. Check your input path.")
-
-    print(f"    Found {len(all_files)} file(s)\n")
-
-    # Filter out already-decrypted files
-    to_process = []
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Decrypt Tesla clips locally with safe outputs")
+    parser.add_argument("input_dir", type=Path)
+    parser.add_argument("output_dir", type=Path)
+    parser.add_argument("--batch-size", type=int, default=20)
+    parser.add_argument("--dry-run", "--scan", dest="dry_run", action="store_true",
+                        help="Offline scan; no token prompt, API calls or output writes")
+    parser.add_argument("--remux", action="store_true", help="Remux using installed ffmpeg")
+    args = parser.parse_args(argv)
+    if not 1 <= args.batch_size <= 100:
+        parser.error("batch size must be between 1 and 100")
+    root = args.input_dir.expanduser().resolve(strict=True)
+    if not root.is_dir():
+        parser.error("input must be a directory")
+    # Inspect the lexical destination before resolve() can hide symlinks.
+    output = Path(os.path.abspath(args.output_dir.expanduser()))
+    if any(p.is_symlink() for p in (output, *output.parents)):
+        parser.error("output path must not contain symlinks")
+    output = output.resolve()
+    if output == root or output in root.parents or root in output.parents:
+        parser.error("input and output directory trees must not overlap")
+    counts = dict(examined=0, encrypted=0, plaintext=0, existing=0,
+                  keys=0, decrypted=0, failed=0, pending=0)
+    items = []
+    all_files = find_encrypted_files(root)
     for src in all_files:
-        rel  = src.relative_to(args.input_dir)
-        dst  = args.output_dir / rel
-        if args.skip_existing and dst.exists():
-            print(f"  ⏭  Skipping (exists): {rel}")
-            continue
-        to_process.append((src, dst))
-
-    if not to_process:
-        print("Nothing to do — all files already decrypted.")
-        return
-
-    print(f"📋  {len(to_process)} file(s) to decrypt\n")
-
-    session = get_session(args.token)
-
-    # Process in batches
-    total_ok  = 0
-    total_err = 0
-
-    for batch_start in range(0, len(to_process), args.batch_size):
-        batch = to_process[batch_start : batch_start + args.batch_size]
-
-        # 1. Read API metadata from each file header
-        file_headers = {}
-        for src, dst in batch:
-            try:
-                header = read_file_header(src)
-                file_headers[header["id"]] = (header, src, dst)
-            except Exception as e:
-                print(f"  [!] Can't read header from {src.name}: {e}")
-                total_err += 1
-
-        if not file_headers:
-            continue
-
-        # 2. Fetch AES keys from Tesla API
-        print(f"🔑  Fetching keys for {len(file_headers)} file(s)…")
+        counts["examined"] += 1
+        rel = src.relative_to(root)
+        dst = output / rel
         try:
-            keys = fetch_keys_batch(session, [h for h, _, _ in file_headers.values()])
-        except requests.HTTPError as e:
-            print(f"  [!] API error: {e}")
-            if e.response.status_code == 401:
-                sys.exit("Token expired or invalid. Please get a fresh token from dashcam.tesla.com.")
-            total_err += len(file_headers)
-            continue
-
-        # 3. Decrypt each file
-        for uid, key_bytes in keys.items():
-            _, src, dst = file_headers[uid]
-            rel = src.relative_to(args.input_dir)
-            print(f"  🔓  {rel}", end="", flush=True)
-
-            if args.dry_run:
-                print(" [dry-run, skipped]")
-                total_ok += 1
+            with src.open("rb") as f:
+                probe = f.read(CHUNK_SIZE)
+            if probe[4:8] == b"ftyp":
+                validate_mp4(src)
+                counts["plaintext"] += 1
                 continue
-
+            if not _has_extended_header(src):
+                raise ValueError("Unsupported or malformed encrypted container")
+            size = _read_real_plaintext_size(src)
+            needed = REAL_CIPHERTEXT_OFFSET + ((size + CHUNK_SIZE - 1) // CHUNK_SIZE) * CHUNK_SIZE
+            if src.stat().st_size < needed:
+                raise ValueError("Truncated encrypted payload")
+            header = read_file_header(src)
+            counts["encrypted"] += 1
+            if any(p.is_symlink() for p in (dst, *dst.parents)):
+                raise ValueError("Destination contains a symlink")
+            if dst.exists():
+                if not dst.is_file():
+                    raise ValueError("Destination is not a regular file")
+                validate_mp4(dst)
+                if not args.remux and dst.stat().st_size != size:
+                    raise ValueError("Existing output has wrong size; move it aside to retry")
+                counts["existing"] += 1
+                continue
+            items.append((header, src, dst))
+        except (OSError, ValueError) as exc:
+            print(f"Failed {str(rel)!r}: {exc}")
+            counts["failed"] += 1
+    counts["pending"] = len(items)
+    print("Scan:", counts)
+    if args.dry_run or not items:
+        return 1 if counts["failed"] else 0
+    print("Footage stays local. Tesla receives clip ID, VIN, key ID, timestamp, wrapped key and public key.")
+    token = prompt_token()
+    session = get_session(token)
+    del token
+    try:
+        for batch in collision_safe_batches(items, args.batch_size):
             try:
-                decrypt_dst = dst
-                if args.remux:
-                    decrypt_dst = dst.with_name(f".{dst.name}.decrypting")
-
-                written = decrypt_file(src, decrypt_dst, key_bytes)
-                if args.remux:
-                    remux_tmp = dst.with_name(f".{dst.name}.remuxing")
-                    try:
-                        remux_mp4(decrypt_dst, remux_tmp)
-                        remux_tmp.replace(dst)
-                    finally:
-                        if decrypt_dst.exists():
-                            decrypt_dst.unlink()
-                        if remux_tmp.exists():
-                            remux_tmp.unlink()
-                mb = written / 1_048_576
-                print(f" → {dst.name} ({mb:.1f} MB) ✓")
-                total_ok += 1
-            except Exception as e:
-                print(f" [ERROR: {e}]")
-                total_err += 1
-                if dst.exists():
-                    dst.unlink()  # Remove partial output
-
-    print(f"\n{'='*50}")
-    print(f"✅  Done: {total_ok} decrypted, {total_err} failed")
-    print(f"📁  Output: {args.output_dir}")
+                keys = fetch_keys_batch(session, [h for h, _, _ in batch])
+            except (requests.RequestException, RuntimeError, ValueError, KeyError, TypeError):
+                print("Key request failed; this batch was not decrypted. Check network/token and retry.")
+                counts["failed"] += len(batch)
+                counts["pending"] -= len(batch)
+                continue
+            for header, src, dst in batch:
+                counts["pending"] -= 1
+                key = keys.get(header["id"])
+                if key is None:
+                    counts["failed"] += 1
+                    print(f"No key returned for {str(src.relative_to(root))!r}")
+                    continue
+                counts["keys"] += 1
+                try:
+                    # No persistent key cache. All outputs start as private temps.
+                    safe_output(src, dst, key, args.remux, output)
+                    counts["decrypted"] += 1
+                    print(f"Decrypted {str(src.relative_to(root))!r}")
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    counts["failed"] += 1
+                    print(f"Decryption/validation failed for {str(src.relative_to(root))!r}; no output published")
+    finally:
+        session.headers.pop("Authorization", None)
+        session.close()
+    print("Results:", counts)
+    return 1 if counts["failed"] else 0
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("Interrupted. Completed outputs retained; rerun to resume.", file=sys.stderr)
+        raise SystemExit(130)
+    except (OSError, ValueError, getpass.GetPassWarning) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
