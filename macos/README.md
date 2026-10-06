@@ -2,25 +2,95 @@
 
 SwiftUI interface for the hardened Python decryptor. macOS 13+, Xcode Command Line Tools (Swift 5.9+) and an installed Python 3.10+ are required. No Python package needs to be installed globally.
 
-## Build on your Mac
+## First-time setup
 
-From a checkout of this repository:
+These steps start from a normal Terminal window. You do not need to have downloaded the project already.
+
+### 1. Open Terminal
+
+Open **Finder → Applications → Utilities → Terminal**, or search for **Terminal** with Spotlight.
+
+Copy only the commands inside the code blocks below. Do not copy the Terminal prompt.
+
+### 2. Check the two requirements
+
+Run these commands:
 
 ```bash
+python3 --version
+swift --version
+```
+
+You need **Python 3.10 or newer** and **Swift 5.9 or newer**.
+
+- If Python is missing or older than 3.10, install a current Python 3 release from [Python's official macOS downloads page](https://www.python.org/downloads/macos/). Close Terminal, reopen it, and check the version again.
+- If Swift is missing, run `xcode-select --install` and complete the Command Line Tools installation. If the command reports that the tools are already installed but Swift is too old, update the tools through Software Update or install a suitable Xcode version.
+- Wait for installations to finish before continuing.
+
+### 3. Download the project
+
+Copy and paste this block into Terminal:
+
+```bash
+cd ~
+git clone https://github.com/dronus4x4/tesla-dashcam-decrypt-hardened.git
+```
+
+This creates a folder named **tesla-dashcam-decrypt-hardened** in your home folder. No GitHub sign-in is needed to download this public repository.
+
+If Terminal says that the destination folder already exists, do not delete it. Continue to the next step if it is an existing checkout of this project; use the update instructions below when needed.
+
+### 4. Build the app
+
+Copy and paste this block:
+
+```bash
+cd ~/tesla-dashcam-decrypt-hardened
 bash macos/scripts/build-app.sh
-open "macos/dist/Tesla Dashcam Decryptor.app"
 ```
 
-The script compiles the native interface and creates a private Python virtual environment inside the app with pinned dependencies. That environment links to Python installed on the building Mac. This is a **local development app**, not a standalone portable installer; retain that Python installation. Building it on a CI runner does not create a portable app for another Mac. It is locally ad hoc signed, not notarized, and not an App Store distribution.
+Wait for it to finish. It downloads the required Python packages and builds the app. Success ends with a line beginning **Built:**.
 
-Alternatively, for development:
+If an error appears, stop here. The app may not have been created, so running the next command will not fix the error.
+
+### 5. Open the app
+
+After the build succeeds, run:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-cd macos
-TESLA_GUI_PYTHON="$PWD/../.venv/bin/python3" swift run
+open ~/tesla-dashcam-decrypt-hardened/macos/dist/"Tesla Dashcam Decryptor.app"
 ```
+
+For future launches, use Finder to open your home folder, then **tesla-dashcam-decrypt-hardened → macos → dist**, and double-click **Tesla Dashcam Decryptor.app**. You can drag the app to the Dock for convenient access.
+
+You only need to build again when updating the app. Keep the Python installation used to build it.
+
+### Common setup errors
+
+| Message | What it means | What to do |
+| --- | --- | --- |
+| `macos/scripts/build-app.sh: No such file or directory` | The project is missing or Terminal is in the wrong folder. | Complete steps 3 and 4, including the `cd` command. |
+| `requirements.txt: No such file or directory` | Terminal is outside the project folder. | Run `cd ~/tesla-dashcam-decrypt-hardened` first. |
+| `Could not find Package.swift` | A development command was run outside the Mac project folder. | Use step 4 to build the app. The development commands further below are optional. |
+| `destination path ... already exists` | The download folder is already present. | Use the existing checkout; do not repeat the clone or delete the folder. |
+| The app does not exist | The build did not finish successfully. | Check the build error before attempting to open the app. |
+
+When requesting help, share the build error, but remove personal usernames, computer names and private paths. Never share a Tesla token.
+
+## Updating an existing installation
+
+First open Terminal and go to the project folder:
+
+```bash
+cd ~/tesla-dashcam-decrypt-hardened
+git pull --ff-only
+```
+
+If the update succeeds, rebuild and then open the app using steps 4 and 5. If Git reports local changes or a merge problem, stop and resolve that before rebuilding.
+
+## About this build
+
+This is a local development app. The build script creates a Python virtual environment inside the app and links it to Python installed on the building Mac. Retain that Python installation. The app is locally ad hoc signed, not notarized. A build from a CI runner is not a portable installer for another Mac.
 
 ## Use
 
@@ -56,3 +126,16 @@ The root Python tests exercise encryption/file handling. `test_gui_bridge.py` ch
 The bundled engine copy must exactly match the root script. Both the build script and bridge tests check that. After changing the core, copy it to `macos/Sources/TeslaDecryptGUI/Resources/tesla_dashcam_decrypt.py`.
 
 Upstream attribution and licence declaration are in the root README and `README.upstream.md`.
+
+
+## Optional: development mode
+
+Most users should use the setup steps above. Developers can instead run the interface directly from the source folder:
+
+```bash
+cd ~/tesla-dashcam-decrypt-hardened
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cd macos
+TESLA_GUI_PYTHON="$PWD/../.venv/bin/python3" swift run
+```
