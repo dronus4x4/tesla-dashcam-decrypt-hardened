@@ -88,11 +88,13 @@ final class DecryptModel: ObservableObject {
             else { eventReader.append(data) }
         }
         job.terminationHandler = { [weak self] task in
+            guard let model = self else { return }
+            let code = task.terminationStatus
             Task { @MainActor in
-                self?.busy = false
-                self?.process = nil
-                if task.terminationStatus != 0 && task.terminationStatus != 130 {
-                    self?.status = "Finished with errors. Review the results below and scan again before retrying."
+                model.busy = false
+                model.process = nil
+                if code != 0 && code != 130 {
+                    model.status = "Finished with errors. Review the results below and scan again before retrying."
                 }
             }
         }
