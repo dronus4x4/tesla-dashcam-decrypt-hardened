@@ -23,7 +23,7 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install -r requirements.txt
-          .venv/bin/python -m unittest -v test_hardening test_gui_bridge test_replacement test_scan_plan test_fast_decrypt
+          .venv/bin/python -m unittest -v test_hardening test_gui_bridge test_replacement test_scan_plan test_fast_decrypt test_organize
       - name: Compile native interface and assemble local app
         working-directory: source
         run: |

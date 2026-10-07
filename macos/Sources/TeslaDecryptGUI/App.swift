@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var showSignIn = false
     @State private var signInReloadID = UUID()
     @State private var confirmReplacement = false
+    @State private var confirmOrganize = false
     @State private var followResults = true
 
     var body: some View {
@@ -64,7 +65,7 @@ struct ContentView: View {
                     Toggle("Replace encrypted clips on the USB", isOn: $model.replaceOriginals)
                         .onChange(of: model.replaceOriginals) { _ in model.modeChanged() }
                     if model.replaceOriginals {
-                        Text("Decrypted clips replace the encrypted originals. No encrypted backup is kept. The USB needs room for one temporary clip.")
+                        Text("Decrypted clips replace the encrypted originals. No encrypted backup is kept. Completed events move into the normal TeslaCam folders with their metadata. The USB needs room for one temporary clip.")
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }.padding(8)
@@ -72,6 +73,8 @@ struct ContentView: View {
             HStack {
                 Button("Scan drive") { model.run(scan: true) }
                     .disabled(model.busy || !model.hasFolders)
+                Button("Organize decrypted events…") { confirmOrganize = true }
+                    .disabled(model.busy || model.input == nil)
                 Text(model.scanDescription).font(.callout).foregroundStyle(.secondary)
             }
             GroupBox("Tesla sign-in") {
@@ -134,6 +137,12 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will replace \(model.pending) encrypted clips in \(model.input?.path ?? "the selected folder") with readable MP4s. Each clip is validated first. No encrypted backup is kept. Failed clips are not replaced.")
+        }
+        .alert("Move decrypted events into normal TeslaCam folders?", isPresented: $confirmOrganize) {
+            Button("Organize events") { model.run(scan: false, organize: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Fully validated events in EncryptedClips move into SavedClips, SentryClips or RecentClips together with their metadata. Encrypted or invalid events stay in place. Existing event folders are never overwritten. No token is needed.")
         }
         .sheet(isPresented: $showSignIn) {
             VStack(alignment: .leading, spacing: 10) {

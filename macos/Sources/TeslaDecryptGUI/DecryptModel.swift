@@ -57,10 +57,10 @@ final class DecryptModel: ObservableObject {
         scanDescription = "Folders changed — scan again."
     }
 
-    func run(scan: Bool) {
-        guard !busy, hasFolders, let input else { return }
+    func run(scan: Bool, organize: Bool = false) {
+        guard !busy, (organize ? self.input != nil : hasFolders), let input else { return }
         var command: Data?
-        if !scan {
+        if !scan && !organize {
             guard let scanPlan else { status = "Scan the selected folder before decrypting."; return }
             do {
                 var data = try JSONSerialization.data(withJSONObject: ["token": token])
@@ -74,7 +74,8 @@ final class DecryptModel: ObservableObject {
         activeRun = runID
         scanRun = scan
         var workerArguments = [WorkerResources.directory.appendingPathComponent("gui_bridge.py").path, input.path]
-        if replaceOriginals { workerArguments.append("--replace-originals") }
+        if organize { workerArguments.append("--organize-decrypted") }
+        else if replaceOriginals { workerArguments.append("--replace-originals") }
         else if let output { workerArguments.append(output.path) }
         let python = Bundle.main.resourceURL?.appendingPathComponent("python-runtime/bin/python3")
         let job = Process()
@@ -146,7 +147,7 @@ final class DecryptModel: ObservableObject {
             }
         }
         log = []
-        status = scan ? "Scanning drive…" : "Decrypting clips…"
+        status = organize ? "Validating and organizing decrypted events…" : (scan ? "Scanning drive…" : "Decrypting clips…")
         fraction = 0
         workSummary = ""
         handled = 0
@@ -226,7 +227,7 @@ final class DecryptModel: ObservableObject {
             log.append(message)
             if log.count > 500 { log.removeFirst(log.count - 500) }
 
-            if kind == "cancelled" || kind == "error" || message.hasPrefix("Finding MP4 clips") || message.hasPrefix("Using completed scan:") || message.hasPrefix("Decrypting ") { status = message }
+            if kind == "cancelled" || kind == "error" || message.hasPrefix("Finding MP4 clips") || message.hasPrefix("Using completed scan:") || message.hasPrefix("Decrypting ") || message.hasPrefix("Organized:") { status = message }
         }
     }
 }

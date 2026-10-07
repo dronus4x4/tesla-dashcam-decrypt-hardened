@@ -26,6 +26,8 @@ Getting your auth token:
 from collections import deque
 from contextlib import contextmanager
 import argparse
+import ctypes
+import errno
 import base64
 import hashlib
 import getpass
@@ -556,26 +558,114 @@ def restore_scan_plan(plan, root, output, replace, remux):
     return counts.copy(), items, identities
 
 
+def rename_directory_exclusive(src: Path, dst: Path):
+    """Atomically move an event on the same volume, never replace a destination."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        rename = libc.renamex_np
+        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        result = rename(os.fsencode(src), os.fsencode(dst), 4)  # RENAME_EXCL
+    elif sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        rename = libc.renameat2
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        result = rename(-100, os.fsencode(src), -100, os.fsencode(dst), 1)  # RENAME_NOREPLACE
+    else:
+        raise OSError(errno.ENOTSUP, "Exclusive event moves are unsupported on this platform")
+    if result != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
+def organize_decrypted_events(root: Path):
+    """Move complete validated events, including metadata, out of EncryptedClips.
+
+    No merges, copies, or overwrites. Mixed/encrypted events stay in place.
+    """
+    if (root / "TeslaCam").is_dir() and not (root / "TeslaCam").is_symlink():
+        root = root / "TeslaCam"
+    encrypted = root / "EncryptedClips"
+    moved = retained = conflicts = 0
+    if not encrypted.exists():
+        print("Organized: no EncryptedClips folder found in the selected TeslaCam folder.")
+        return moved, retained, conflicts
+    if encrypted.is_symlink():
+        raise ValueError("EncryptedClips must not be a symbolic link")
+    for category in ("SavedClips", "SentryClips", "RecentClips"):
+        source = encrypted / category
+        if not source.exists():
+            continue
+        destination = root / category
+        if source.is_symlink() or not source.is_dir() or destination.is_symlink():
+            raise ValueError("Clip category must be a real directory")
+        for event in sorted(source.iterdir()):
+            if event.name.startswith("."):
+                continue
+            if event.is_symlink() or not event.is_dir():
+                retained += 1
+                print(f"Event retained: {str(event.relative_to(root))!r}; not a regular event folder")
+                continue
+            target = destination / event.name
+            if target.exists() or target.is_symlink():
+                conflicts += 1
+                print(f"Event conflict: {str(target.relative_to(root))!r}; both folders retained, nothing overwritten")
+                continue
+            try:
+                snapshots = [(event, file_identity(event.stat()))]
+                videos = 0
+                for current, dirs, files in os.walk(event, followlinks=False):
+                    directory = Path(current)
+                    for name in dirs + files:
+                        path = directory / name
+                        if path.is_symlink():
+                            raise ValueError("event contains a symbolic link")
+                        identity = file_identity(path.stat())
+                        snapshots.append((path, identity))
+                        if not name.startswith(".") and name.lower().endswith(".mp4") and path.is_file():
+                            validate_mp4(path)
+                            videos += 1
+                if not videos:
+                    raise ValueError("no MP4 clips to validate")
+                for path, identity in snapshots:
+                    if path.is_symlink() or file_identity(path.stat()) != identity:
+                        raise ValueError("event changed during validation")
+                destination.mkdir(exist_ok=True)
+                rename_directory_exclusive(event, target)
+                moved += 1
+                print(f"Event moved: {str(event.relative_to(root))!r} -> {str(target.relative_to(root))!r}; metadata retained")
+            except (OSError, ValueError) as exc:
+                retained += 1
+                print(f"Event retained: {str(event.relative_to(root))!r}; encrypted, invalid, changed or unavailable ({type(exc).__name__})")
+    print(f"Organized: {moved} events moved · {retained} retained · {conflicts} conflicts. Scan again to refresh counts.")
+    return moved, retained, conflicts
+
+
 def main(argv=None, *, scan_plan=None, on_scan=None):
     parser = argparse.ArgumentParser(description="Decrypt Tesla clips locally with safe outputs")
     parser.add_argument("input_dir", type=Path)
     parser.add_argument("output_dir", type=Path, nargs="?")
     parser.add_argument("--replace-originals", action="store_true",
                         help="Replace validated encrypted clips in place; no encrypted backup kept")
+    parser.add_argument("--organize-decrypted", action="store_true",
+                        help="Offline: move fully decrypted event folders out of EncryptedClips; never overwrite")
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--dry-run", "--scan", dest="dry_run", action="store_true",
                         help="Offline scan; no token prompt, API calls or output writes")
     parser.add_argument("--remux", action="store_true", help="Remux using installed ffmpeg")
     args = parser.parse_args(argv)
+    if args.organize_decrypted and (args.output_dir is not None or args.remux or args.dry_run):
+        parser.error("--organize-decrypted takes only the input folder")
     if args.replace_originals and (args.output_dir is not None or args.remux):
         parser.error("--replace-originals takes no output directory and cannot be combined with --remux")
-    if not args.replace_originals and args.output_dir is None:
+    if not args.organize_decrypted and not args.replace_originals and args.output_dir is None:
         parser.error("provide an output directory, or explicitly select --replace-originals")
     if not 1 <= args.batch_size <= 100:
         parser.error("batch size must be between 1 and 100")
     root = args.input_dir.expanduser().resolve(strict=True)
     if not root.is_dir():
         parser.error("input must be a directory")
+    if args.organize_decrypted:
+        _, retained, conflicts = organize_decrypted_events(root)
+        return 1 if retained or conflicts else 0
     # Inspect the lexical destination before resolve() can hide symlinks.
     output = None
     if not args.replace_originals:
@@ -665,6 +755,8 @@ def main(argv=None, *, scan_plan=None, on_scan=None):
         print(f"Using completed scan: {len(items)} encrypted clips; readable files are not rescanned.")
     print("Scan:", counts)
     if args.dry_run or not items:
+        if not args.dry_run and args.replace_originals:
+            organize_decrypted_events(root)
         return 1 if counts["failed"] else 0
     if args.replace_originals:
         print("Replacement mode: validated plaintext will replace encrypted clips; no encrypted backup is kept.")
@@ -733,6 +825,8 @@ def main(argv=None, *, scan_plan=None, on_scan=None):
         session.headers.pop("Authorization", None)
         session.close()
     performance_report()
+    if args.replace_originals:
+        organize_decrypted_events(root)
     print("Results:", counts)
     return 1 if counts["failed"] else 0
 

@@ -146,7 +146,7 @@ The token is a temporary account credential. Never post it in screenshots/chat/i
 - For replacement mode, resume by scanning the same folder and signing in again. Completed clips are now unencrypted, so they are skipped. A clip interrupted before replacement remains encrypted and can be retried.
 - For copy mode, select the same source and destination again; valid existing outputs are skipped.
 - **Follow latest results** scrolls to new entries. Turn it off to read older messages. The UI keeps the most recent 500 messages.
-- **Plain** means an input has a recognised MP4 header, not that the app decoded and verified its video. **Existing** means a destination output passed the skip checks. **Failed** means a clip/request could not be processed; read its message before retrying.
+- **Unencrypted** means an input has a recognised MP4 header, not that the app decoded and verified its video. **Existing** means a destination output passed the skip checks. **Failed** means a clip/request could not be processed; read its message before retrying.
 - When finished, check some output clips in a video player, then safely eject through Finder.
 
 
@@ -233,3 +233,15 @@ Values accumulate across the job and are rounded to tenths of a second; `0.0s` i
 ### Refreshing sign-in after 2FA
 
 The sign-in window has a **Refresh Dashcam** button. Use it if the page stalls after completing 2FA; it returns to Dashcam while keeping the same temporary browser session. Then select a still-encrypted clip to trigger the key request and token capture. Refreshing alone does not guarantee a new token. The app does not impose a deadline for entering 2FA, but Tesla can expire or reject its own login session. If that happens, sign in again; if Tesla blocks the embedded browser, use the browser token instructions above. The app cannot read tokens from your separate Firefox session automatically.
+
+### Restore decrypted events to the normal TeslaCam folders
+
+Replacement mode now moves fully decrypted event folders from `TeslaCam/EncryptedClips/SavedClips`, `SentryClips`, or `RecentClips` into the corresponding normal TeslaCam category. The entire event folder moves together, including JSON metadata and thumbnails. All MP4s in an event must pass full structure validation first; mixed encrypted/decrypted or invalid events stay in place. Existing destination event folders are never overwritten or merged; conflicts are reported for review. This restores the normal folder layout for viewers; compatibility with each viewer and the car still needs checking.
+
+For clips decrypted with an earlier version, use **Organize decrypted events…** in the Mac app, with the TeslaCam folder or drive selected. No token or decryption is required. Or, from the repository with its virtual environment installed:
+
+```sh
+.venv/bin/python tesla_dashcam_decrypt.py /Volumes/TESLADRIVE/TeslaCam --organize-decrypted
+```
+
+This moves folders on the same volume, without copying video data. It does not delete conflicting or encrypted events. Wait for completion, scan again, and safely eject the drive before reconnecting it to a viewer or the car.

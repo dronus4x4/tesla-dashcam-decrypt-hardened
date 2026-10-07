@@ -71,9 +71,9 @@ python tesla_dashcam_decrypt.py /Volumes/TESLA/TeslaCam --replace-originals --sc
 python tesla_dashcam_decrypt.py /Volumes/TESLA/TeslaCam --replace-originals
 ```
 
-Each clip decrypts into a temporary file beside its source. The temporary MP4 is validated and flushed before a same-filesystem replacement. Wrong keys, insufficient space and failures before replacement leave the encrypted source intact. Already-unencryptedtext clips are skipped on subsequent scans. No hardlinks are required, so this mode supports writable exFAT USB drives. Keep the drive connected throughout and safely eject it afterwards.
+Each clip decrypts into a temporary file beside its source. The temporary MP4 is validated and flushed before a same-filesystem replacement. Wrong keys, insufficient space and failures before replacement leave the encrypted source intact. Already-unencrypted clips are skipped on subsequent scans. No hardlinks are required, so this mode supports writable exFAT USB drives. Keep the drive connected throughout and safely eject it afterwards.
 
-This changes the USB and keeps no encrypted backup. It requires free space for one temporary plaintext clip at a time. It preserves filenames, folders and timestamps, but does not rewrite Tesla event metadata; compatibility with the car's viewer is unverified. Filesystem corruption or power loss during a rename cannot be eliminated by the program, especially on non-journaled USB filesystems. Make a backup if you need recovery beyond the app's normal failure handling. This option cannot be combined with a destination folder or `--remux`.
+This changes the USB and keeps no encrypted backup. It requires free space for one temporary plaintext clip at a time. It preserves filenames and timestamps, moves completed event folders into normal TeslaCam categories, but does not rewrite Tesla event metadata; compatibility with the car's viewer is unverified. Filesystem corruption or power loss during a rename cannot be eliminated by the program, especially on non-journaled USB filesystems. Make a backup if you need recovery beyond the app's normal failure handling. This option cannot be combined with a destination folder or `--remux`.
 
 ## Changes
 
@@ -99,7 +99,7 @@ This changes the USB and keeps no encrypted backup. It requires free space for o
 
 Footage stays local. Tesla receives the clip ID, VIN, key ID, timestamp, wrapped key and public key, along with your bearer token. Decryption depends on Tesla's API and account authorization.
 
-By default, original clips are opened for reading only and decrypted copies go to a separate destination. Optional `--replace-originals` replaces encrypted source files with validated plaintext at the same paths, with no encrypted backup. Keep a separate backup if originals must be retained. Already-unencryptedtext input MP4s are counted and left in place, not copied.
+By default, original clips are opened for reading only and decrypted copies go to a separate destination. Optional `--replace-originals` replaces encrypted source files with validated plaintext at the same paths, with no encrypted backup. Keep a separate backup if originals must be retained. Already-unencrypted input MP4s are counted and left in place, not copied.
 
 MP4 structure checks detect many wrong-key/corruption cases but are not cryptographic authentication, video decoding or proof of ownership/source identity. Existing-output checks cannot prove that a file belongs to a particular input. Use a fresh dedicated destination per USB archive. The filesystem protections assume no hostile same-user process races changing directories or inputs during a run. Root and processes running as your user can read secrets/plaintext. A kill or power loss can leave `.tesla-*` temporary files; delete those only after stopping the process.
 
@@ -115,3 +115,15 @@ Upstream README declares `MIT`. Upstream provides no separate LICENSE file or fu
 
 
 The scan/decryption performance changes described above apply to the Python CLI and Mac app. The iOS app has its own native Swift implementation.
+
+### Restore decrypted events to the normal TeslaCam folders
+
+Replacement mode now moves fully decrypted event folders from `TeslaCam/EncryptedClips/SavedClips`, `SentryClips`, or `RecentClips` into the corresponding normal TeslaCam category. The entire event folder moves together, including JSON metadata and thumbnails. All MP4s in an event must pass full structure validation first; mixed encrypted/decrypted or invalid events stay in place. Existing destination event folders are never overwritten or merged; conflicts are reported for review. This restores the normal folder layout for viewers; compatibility with each viewer and the car still needs checking.
+
+For clips decrypted with an earlier version, use **Organize decrypted events…** in the Mac app, with the TeslaCam folder or drive selected. No token or decryption is required. Or, from the repository with its virtual environment installed:
+
+```sh
+.venv/bin/python tesla_dashcam_decrypt.py /Volumes/TESLADRIVE/TeslaCam --organize-decrypted
+```
+
+This moves folders on the same volume, without copying video data. It does not delete conflicting or encrypted events. Wait for completion, scan again, and safely eject the drive before reconnecting it to a viewer or the car.

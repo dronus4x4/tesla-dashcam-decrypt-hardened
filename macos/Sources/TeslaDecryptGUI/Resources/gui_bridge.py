@@ -50,7 +50,7 @@ def main():
     token = ""
     plan = None
     scanning = "--scan" in sys.argv[1:]
-    if "--scan" not in sys.argv[1:]:
+    if not scanning and "--organize-decrypted" not in sys.argv[1:]:
         # The native app closes the pipe after one message. Bound its size.
         message = sys.stdin.buffer.readline(16385)
         if len(message) > 16384:
