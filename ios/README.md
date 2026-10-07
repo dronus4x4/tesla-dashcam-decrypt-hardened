@@ -1,5 +1,14 @@
 # Sentry USB Unlock for iPhone and iPad
 
+## TL;DR
+
+This is **iOS beta source code**, not a published TestFlight download. Use full Xcode on a Mac to [open the project](#open-the-project-on-your-mac), select your Apple developer team, test on a device and [upload to your own TestFlight](#upload-to-your-testflight).
+
+Once installed: while parked, connect the dashcam USB, select **TeslaCam**, scan, sign in or paste a temporary token, and save unlocked copies. Test copy mode first. USB replacement is optional and keeps no encrypted backup. Keep the app in the foreground and use **Cancel** before disconnecting; completed replacements are skipped after rescanning.
+
+Phone sign-in and real USB operation still need live testing. The latest Python/Mac performance changes do not automatically apply to this native Swift app. For the working Mac workflow, see the [Mac guide](../macos/README.md).
+
+
 **Version 0.1.0 · build 1 · iOS/iPadOS 17 or later**
 
 Bundle ID: `com.dronusdrives.sentryusbunlock`

@@ -1,4 +1,25 @@
-# macOS GUI — first development version
+# Tesla Dashcam Decryptor for macOS
+
+## TL;DR
+
+1. **First time:** install Python 3.10+ and Swift 5.9+ tools, then follow [First-time setup](#first-time-setup) below. Build the app on the Mac where you will use it.
+2. Plug in the drive. Open the app and choose its **TeslaCam** folder.
+3. Choose **copies on your Mac** or **Replace encrypted clips on the USB**. Replacement keeps no encrypted backup.
+4. Click **Scan drive**. Sign in with Tesla, or use the [manual token fallback](#manual-token-fallback-firefox-or-chrome) if the embedded sign-in is blocked.
+5. Click **Decrypt all**. Watch **processed / remaining / failed**. The completed scan is reused; already-plain clips are skipped.
+6. To stop, click **Stop decrypting** and wait for cleanup. To resume later, scan and sign in again. Completed replacements stay completed.
+
+**Updating an existing checkout:** stop any active job, wait for cleanup, quit the app, then paste this into a normal Terminal window:
+
+```bash
+cd ~/tesla-dashcam-decrypt-hardened
+git pull --ff-only
+bash macos/scripts/build-app.sh
+open "macos/dist/Tesla Dashcam Decryptor.app"
+```
+
+Run each line after the previous one succeeds. No `sudo` or GitHub login is needed. These commands assume you originally cloned into your home folder. If you used another location, change the `cd` line. Scan and sign in again after reopening. You do not have to stop a successful run merely because an update exists; you can let it finish and update afterwards.
+
 
 SwiftUI interface for the hardened Python decryptor. macOS 13+, Xcode Command Line Tools (Swift 5.9+) and an installed Python 3.10+ are required. No Python package needs to be installed globally.
 
@@ -79,7 +100,7 @@ When requesting help, share the build error, but remove personal usernames, comp
 
 ## Updating an existing installation
 
-First open Terminal and go to the project folder:
+Stop an active scan/decryption with **Stop decrypting**, wait for the worker to exit, and quit the app before rebuilding. Completed files remain. Then open Terminal and go to the project folder:
 
 ```bash
 cd ~/tesla-dashcam-decrypt-hardened
@@ -95,7 +116,7 @@ This is a local development app. The build script creates a Python virtual envir
 ## Use
 
 1. Plug in your Tesla USB/SSD.
-2. **Select Tesla drive**: choose the drive or its TeslaCam folder.
+2. **Select Tesla drive…**: choose **TeslaCam** inside the drive. Selecting this folder avoids protected system folders at the drive root. You can also select a specific clip subfolder to process a smaller batch.
 3. Choose the output mode: leave **Replace encrypted clips on the USB** off and select a destination on your Mac, or turn it on to replace files on the selected drive.
 4. **Scan drive**: offline inventory; no token or network request. The status first shows files being found, then **Checking clips: X of Y**. Encrypted ownership metadata is read once per file. Already-plain inputs are classified by their MP4 ftyp header and left untouched; this is not a full playback/integrity check. New decrypted outputs and existing destination files still undergo full MP4 structure checks. Large folders and slow USB devices can take time.
 5. **Sign in with Tesla**: sign into Tesla's real Dashcam website in a temporary WebKit window. Select one encrypted clip there so the website makes its normal key request. The app observes the Bearer header on that exact decryption endpoint and keeps the token in memory.
@@ -104,7 +125,30 @@ This is a local development app. The build script creates a Python virtual envir
 
 The app does not generate a Tesla credential independently. Tesla issues the token when you authenticate. Embedded sign-in, MFA/passkeys, the web file picker and automatic token capture require real-Mac/live-Tesla testing; website changes or Tesla restrictions can break them. No endpoint or login bypass is implemented.
 
-If embedded sign-in fails, use the official dashcam site in your normal browser and paste its temporary token into the app's **Paste a temporary token instead** secure field. This fallback still requires extracting a token from browser developer tools as described in the root README.
+### Manual token fallback (Firefox or Chrome)
+
+Use this if Tesla reports that the embedded browser is blocking required security tools.
+
+1. Open [dashcam.tesla.com](https://dashcam.tesla.com) in Firefox or Chrome and sign in.
+2. Open developer tools: **Firefox → Tools → Browser Tools → Web Developer Tools**, or **Chrome → View → Developer → Developer Tools**.
+3. In the panel that opens, click **Network**. Do this before choosing a clip so the key request is recorded.
+4. On the Tesla webpage, click **Browse Files** and select one encrypted `.mp4` from the USB. Wait until the webpage decrypts it.
+5. In the **Network** panel, find the request whose address ends in **`/api/1/decrypt/batch`**. If there are many entries, type **`decrypt`** into the Network filter. If no request appears, leave Network open and select a different encrypted clip.
+6. Click that request, click **Headers**, and look under **Request Headers** for **Authorization**. Its value begins with **`Bearer `**.
+7. Copy only the long value **after** `Bearer `, without quotes or extra spaces.
+8. Return to the app. Expand **Paste a temporary token instead** and paste into the hidden token field, then click **Decrypt all**.
+
+The token is a temporary account credential. Never post it in screenshots/chat/issues, put it in a shell command or save it in this repository. The app clears the visible token after starting a job; **Not connected** during an active job therefore does not mean that decryption has lost authorization. A new token is needed for another job. If Tesla rejects authorization, sign in again and rescan before retrying.
+
+### Stop, resume and read the results
+
+- **Stop decrypting** also stops a scan. Wait until the app says the worker has exited before closing it or ejecting the USB.
+- For replacement mode, resume by scanning the same folder and signing in again. Completed clips are now plain, so they are skipped. A clip interrupted before replacement remains encrypted and can be retried.
+- For copy mode, select the same source and destination again; valid existing outputs are skipped.
+- **Follow latest results** scrolls to new entries. Turn it off to read older messages. The UI keeps the most recent 500 messages.
+- **Plain** means an input has a recognised MP4 header, not that the app decoded and verified its video. **Existing** means a destination output passed the skip checks. **Failed** means a clip/request could not be processed; read its message before retrying.
+- When finished, check some output clips in a video player, then safely eject through Finder.
+
 
 ## Replacing encrypted clips on the USB
 
@@ -162,8 +206,26 @@ Decryption reads the pending source metadata once for the safety check and passe
 
 The worker uses bounded 1 MB sequential reads and writes, with bulk AES processing that preserves the original 4 KB CBC page boundaries. Original files are still replaced only after validation and a successful disk flush. No parallel writers are enabled.
 
+The token authorizes key requests; it does not decrypt the video bytes. The worker fetches keys in batches and decrypts locally, one file at a time. A large archive can still take hours. USB-C describes the connector and does not by itself establish transfer speed.
+
 Every 20 processed clips, the results show cumulative timings for key requests (`keys`), decryption plus file reads/writes (`decrypt_io`), MP4 checks (`validation`), and disk flushes (`flush`). These counters use a monotonic clock; they do not sample the drive, write telemetry files, or disclose keys. Elapsed time also includes other file operations. They help identify the bottleneck on a particular Mac and USB drive.
 
 An offline 32 MB synthetic benchmark on the development machine measured roughly four times faster decryption and buffered I/O than the previous loop. This is not a measured T7 or M4 Max speedup; overall gains depend on disk and flush latency.
 
 Scanning uses directory-entry metadata to avoid repeated filesystem queries and reads only the ftyp box for plain input clips. It does not reopen and seek through every already-plain clip. Encrypted metadata and payload lengths are still checked, and full output validation remains mandatory before replacement.
+
+For example:
+
+```text
+Timing (cumulative): elapsed 49.7s · keys 1.3s · decrypt_io 47.8s · validation 0.0s · flush 0.0s
+```
+
+| Field | What it measures |
+| --- | --- |
+| `elapsed` | Wall-clock time since this decryption job started, including other file operations. |
+| `keys` | Time waiting for Tesla's key requests, including retries. |
+| `decrypt_io` | Combined file reads, AES decryption, buffered writes and closing the temporary output. It does not isolate CPU from disk waiting. |
+| `validation` | Checking the new MP4's container structure. |
+| `flush` | The explicit disk-flush call before publishing. Some write waiting may already have occurred inside `decrypt_io`. |
+
+Values accumulate across the job and are rounded to tenths of a second; `0.0s` is not proof that an operation took zero time. The synthetic benchmark above is not a guarantee of four-times-faster archive processing. To compare actual runs, use similar clips and compare timing lines over many files. No throughput test or extra drive scan is run while decrypting.
