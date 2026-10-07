@@ -202,7 +202,7 @@ final class DecryptModel: ObservableObject {
         if let counts = event["counts"] as? [String: Int] {
             if kind == "scan" {
                 pending = counts["pending", default: 0]
-                scanDescription = "\(counts["encrypted", default: 0]) encrypted · \(counts["existing", default: 0]) existing · \(counts["plaintext", default: 0]) plain · \(counts["failed", default: 0]) failed"
+                scanDescription = "\(counts["encrypted", default: 0]) encrypted · \(counts["existing", default: 0]) existing · \(counts["plaintext", default: 0]) unencrypted · \(counts["failed", default: 0]) failed"
                 initialPending = pending
                 fraction = scanRun ? 1 : 0
                 status = scanRun ? "Scan complete: \(pending) clips ready." : "Requesting keys for \(pending) clips…"

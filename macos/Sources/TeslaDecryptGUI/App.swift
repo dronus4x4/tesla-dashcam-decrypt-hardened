@@ -35,6 +35,7 @@ final class DecryptAppDelegate: NSObject, NSApplicationDelegate {
 struct ContentView: View {
     @ObservedObject var model: DecryptModel
     @State private var showSignIn = false
+    @State private var signInReloadID = UUID()
     @State private var confirmReplacement = false
     @State private var followResults = true
 
@@ -137,9 +138,9 @@ struct ContentView: View {
         .sheet(isPresented: $showSignIn) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Sign in at Tesla’s Dashcam website").font(.headline)
-                Text("After signing in, select one encrypted clip on the website. The app captures the token used for that key request. This temporary browser session is discarded when closed.")
+                Text("After signing in, select one encrypted clip on the website. The app captures the token used for that key request. If the page stalls after 2FA, use Refresh Dashcam, then select an encrypted clip. This temporary browser session is discarded when closed.")
                     .font(.callout)
-                TeslaSignInView { token in
+                TeslaSignInView(reloadID: signInReloadID) { token in
                     model.token = token
                     model.status = "Tesla token received. You can now decrypt the scanned clips."
                     showSignIn = false
@@ -148,6 +149,7 @@ struct ContentView: View {
                     Text("If Tesla declines this embedded browser, use the manual token field.")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
+                    Button("Refresh Dashcam") { signInReloadID = UUID() }
                     Button("Close") { showSignIn = false }
                 }
             }.padding(18).frame(width: 850, height: 700)

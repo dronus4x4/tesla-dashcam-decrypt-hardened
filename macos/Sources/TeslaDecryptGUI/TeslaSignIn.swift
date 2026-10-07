@@ -3,8 +3,9 @@ import SwiftUI
 import WebKit
 
 struct TeslaSignInView: NSViewRepresentable {
+    var reloadID = UUID()
     let onToken: (String) -> Void
-    func makeCoordinator() -> Coordinator { Coordinator(onToken: onToken) }
+    func makeCoordinator() -> Coordinator { Coordinator(onToken: onToken, reloadID: reloadID) }
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -23,7 +24,13 @@ struct TeslaSignInView: NSViewRepresentable {
         view.load(URLRequest(url: URL(string: "https://dashcam.tesla.com")!))
         return view
     }
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    func updateNSView(_ nsView: WKWebView, context: Context) {
+        guard context.coordinator.reloadID != reloadID else { return }
+        context.coordinator.reloadID = reloadID
+        // Keep this browser session, including completed MFA, while returning
+        // to Dashcam. Do not reload automatically during credential entry.
+        nsView.load(URLRequest(url: URL(string: "https://dashcam.tesla.com")!))
+    }
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
         nsView.stopLoading()
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: "dashcamToken")
@@ -34,7 +41,11 @@ struct TeslaSignInView: NSViewRepresentable {
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         let onToken: (String) -> Void
-        init(onToken: @escaping (String) -> Void) { self.onToken = onToken }
+        var reloadID: UUID
+        init(onToken: @escaping (String) -> Void, reloadID: UUID) {
+            self.onToken = onToken
+            self.reloadID = reloadID
+        }
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame,

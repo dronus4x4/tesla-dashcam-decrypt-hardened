@@ -6,7 +6,7 @@
 2. Plug in the drive. Open the app and choose its **TeslaCam** folder.
 3. Choose **copies on your Mac** or **Replace encrypted clips on the USB**. Replacement keeps no encrypted backup.
 4. Click **Scan drive**. Sign in with Tesla, or use the [manual token fallback](#manual-token-fallback-firefox-or-chrome) if the embedded sign-in is blocked.
-5. Click **Decrypt all**. Watch **processed / remaining / failed**. The completed scan is reused; already-plain clips are skipped.
+5. Click **Decrypt all**. Watch **processed / remaining / failed**. The completed scan is reused; already-unencrypted clips are skipped.
 6. To stop, click **Stop decrypting** and wait for cleanup. To resume later, scan and sign in again. Completed replacements stay completed.
 
 **Updating an existing checkout:** stop any active job, wait for cleanup, quit the app, then paste this into a normal Terminal window:
@@ -118,7 +118,7 @@ This is a local development app. The build script creates a Python virtual envir
 1. Plug in your Tesla USB/SSD.
 2. **Select Tesla drive…**: choose **TeslaCam** inside the drive. Selecting this folder avoids protected system folders at the drive root. You can also select a specific clip subfolder to process a smaller batch.
 3. Choose the output mode: leave **Replace encrypted clips on the USB** off and select a destination on your Mac, or turn it on to replace files on the selected drive.
-4. **Scan drive**: offline inventory; no token or network request. The status first shows files being found, then **Checking clips: X of Y**. Encrypted ownership metadata is read once per file. Already-plain inputs are classified by their MP4 ftyp header and left untouched; this is not a full playback/integrity check. New decrypted outputs and existing destination files still undergo full MP4 structure checks. Large folders and slow USB devices can take time.
+4. **Scan drive**: offline inventory; no token or network request. The status first shows files being found, then **Checking clips: X of Y**. Encrypted ownership metadata is read once per file. Already-unencrypted inputs are classified by their MP4 ftyp header and left untouched; this is not a full playback/integrity check. New decrypted outputs and existing destination files still undergo full MP4 structure checks. Large folders and slow USB devices can take time.
 5. **Sign in with Tesla**: sign into Tesla's real Dashcam website in a temporary WebKit window. Select one encrypted clip there so the website makes its normal key request. The app observes the Bearer header on that exact decryption endpoint and keeps the token in memory.
 6. **Decrypt all**: reuses the completed scan; readable clips are not rescanned. Each pending encrypted source is checked against its scanned identity and header immediately before writing, and validated before publication. New files added since scanning wait for the next scan. The main status shows processed and remaining counts, with decrypted/replaced/failed totals below it. Results follow new entries automatically; turn off **Follow latest results** to read older entries. **Stop decrypting** or **Command + .** requests cleanup; wait for the worker to exit before ejecting. Quitting waits for worker cleanup. USB replacement mode asks you to confirm the selected folder and clip count first.
 7. **Show destination** opens the output folder or selected drive. Safely eject the drive when finished.
@@ -143,7 +143,7 @@ The token is a temporary account credential. Never post it in screenshots/chat/i
 ### Stop, resume and read the results
 
 - **Stop decrypting** also stops a scan. Wait until the app says the worker has exited before closing it or ejecting the USB.
-- For replacement mode, resume by scanning the same folder and signing in again. Completed clips are now plain, so they are skipped. A clip interrupted before replacement remains encrypted and can be retried.
+- For replacement mode, resume by scanning the same folder and signing in again. Completed clips are now unencrypted, so they are skipped. A clip interrupted before replacement remains encrypted and can be retried.
 - For copy mode, select the same source and destination again; valid existing outputs are skipped.
 - **Follow latest results** scrolls to new entries. Turn it off to read older messages. The UI keeps the most recent 500 messages.
 - **Plain** means an input has a recognised MP4 header, not that the app decoded and verified its video. **Existing** means a destination output passed the skip checks. **Failed** means a clip/request could not be processed; read its message before retrying.
@@ -212,7 +212,7 @@ Every 20 processed clips, the results show cumulative timings for key requests (
 
 An offline 32 MB synthetic benchmark on the development machine measured roughly four times faster decryption and buffered I/O than the previous loop. This is not a measured T7 or M4 Max speedup; overall gains depend on disk and flush latency.
 
-Scanning uses directory-entry metadata to avoid repeated filesystem queries and reads only the ftyp box for plain input clips. It does not reopen and seek through every already-plain clip. Encrypted metadata and payload lengths are still checked, and full output validation remains mandatory before replacement.
+Scanning uses directory-entry metadata to avoid repeated filesystem queries and reads only the ftyp box for unencrypted input clips. It does not reopen and seek through every already-unencrypted clip. Encrypted metadata and payload lengths are still checked, and full output validation remains mandatory before replacement.
 
 For example:
 
@@ -229,3 +229,7 @@ Timing (cumulative): elapsed 49.7s · keys 1.3s · decrypt_io 47.8s · validatio
 | `flush` | The explicit disk-flush call before publishing. Some write waiting may already have occurred inside `decrypt_io`. |
 
 Values accumulate across the job and are rounded to tenths of a second; `0.0s` is not proof that an operation took zero time. The synthetic benchmark above is not a guarantee of four-times-faster archive processing. To compare actual runs, use similar clips and compare timing lines over many files. No throughput test or extra drive scan is run while decrypting.
+
+### Refreshing sign-in after 2FA
+
+The sign-in window has a **Refresh Dashcam** button. Use it if the page stalls after completing 2FA; it returns to Dashcam while keeping the same temporary browser session. Then select a still-encrypted clip to trigger the key request and token capture. Refreshing alone does not guarantee a new token. The app does not impose a deadline for entering 2FA, but Tesla can expire or reject its own login session. If that happens, sign in again; if Tesla blocks the embedded browser, use the browser token instructions above. The app cannot read tokens from your separate Firefox session automatically.
