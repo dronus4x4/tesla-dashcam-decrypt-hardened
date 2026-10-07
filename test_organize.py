@@ -29,6 +29,27 @@ class OrganizeTests(unittest.TestCase):
         self.assertEqual((self.target / 'front.mp4').stat().st_mtime_ns, before)
         self.assertEqual((self.target / 'event.json').read_bytes(), b'{"event":"saved"}')
         self.assertEqual(self.organize(), (0, 0, 0))
+    def test_unsupported_exclusive_rename_uses_reservation(self):
+        with patch.object(d, '_rename_directory_native', side_effect=OSError(d.errno.ENOTSUP, 'unsupported')):
+            self.assertEqual(self.organize(), (1, 0, 0))
+        self.assertEqual((self.target / 'front.mp4').read_bytes(), MP4)
+    def test_fallback_does_not_replace_existing_directory(self):
+        self.target.mkdir(parents=True)
+        with patch.object(d, '_rename_directory_native', side_effect=OSError(d.errno.ENOTSUP, 'unsupported')):
+            with self.assertRaises(FileExistsError):
+                d.rename_directory_exclusive(self.event, self.target)
+        self.assertTrue(self.event.exists())
+    def test_fallback_failure_cleans_reservation_and_keeps_source(self):
+        self.target.parent.mkdir(parents=True)
+        with patch.object(d, '_rename_directory_native', side_effect=OSError(d.errno.ENOTSUP, 'unsupported')), patch.object(d.os, 'rename', side_effect=OSError(d.errno.EACCES, 'denied')):
+            with self.assertRaises(OSError):
+                d.rename_directory_exclusive(self.event, self.target)
+        self.assertTrue(self.event.exists())
+        self.assertFalse(self.target.exists())
+    def test_readme_and_thumbnail_are_not_failed_events(self):
+        (self.event.parent / '-README_en.txt').write_text('info')
+        (self.event.parent / 'thumb.png').write_bytes(b'image')
+        self.assertEqual(self.organize(), (1, 0, 0))
     def test_mixed_event_stays_until_all_videos_decrypted(self):
         fixture(self.event / 'back.mp4')
         self.assertEqual(self.organize(), (0, 1, 0))

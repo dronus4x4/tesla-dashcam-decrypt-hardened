@@ -558,7 +558,7 @@ def restore_scan_plan(plan, root, output, replace, remux):
     return counts.copy(), items, identities
 
 
-def rename_directory_exclusive(src: Path, dst: Path):
+def _rename_directory_native(src: Path, dst: Path):
     """Atomically move an event on the same volume, never replace a destination."""
     libc = ctypes.CDLL(None, use_errno=True)
     if sys.platform == "darwin":
@@ -574,6 +574,35 @@ def rename_directory_exclusive(src: Path, dst: Path):
     if result != 0:
         code = ctypes.get_errno()
         raise OSError(code, os.strerror(code))
+
+
+def rename_directory_exclusive(src: Path, dst: Path):
+    """Move without replacing an existing destination, including on exFAT.
+
+    If exclusive rename is unsupported, reserve an empty destination with mkdir
+    before replacing that reservation. Other programs must not mutate these
+    folders while organizing. No file copying or extra clip space is required.
+    """
+    try:
+        _rename_directory_native(src, dst)
+        return
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS):
+            raise
+    dst.mkdir()  # Exclusive reservation; fails even for an existing empty folder.
+    reserved = dst.stat()
+    def owns_reservation():
+        current = dst.lstat()
+        return (not dst.is_symlink() and current.st_dev == reserved.st_dev
+                and current.st_ino == reserved.st_ino and not any(dst.iterdir()))
+    try:
+        if not owns_reservation():
+            raise OSError(errno.EBUSY, "Destination reservation changed")
+        os.rename(src, dst)
+    finally:
+        # Only remove our still-empty reservation after a failed move.
+        if src.exists() and dst.exists() and owns_reservation():
+            dst.rmdir()
 
 
 def organize_decrypted_events(root: Path):
@@ -600,6 +629,8 @@ def organize_decrypted_events(root: Path):
         for event in sorted(source.iterdir()):
             if event.name.startswith("."):
                 continue
+            if event.is_file() and not event.is_symlink():
+                continue  # Category README/thumbnail files are not events.
             if event.is_symlink() or not event.is_dir():
                 retained += 1
                 print(f"Event retained: {str(event.relative_to(root))!r}; not a regular event folder")
@@ -609,10 +640,13 @@ def organize_decrypted_events(root: Path):
                 conflicts += 1
                 print(f"Event conflict: {str(target.relative_to(root))!r}; both folders retained, nothing overwritten")
                 continue
+            stage = "validation"
             try:
                 snapshots = [(event, file_identity(event.stat()))]
                 videos = 0
-                for current, dirs, files in os.walk(event, followlinks=False):
+                def walk_error(exc):
+                    raise exc
+                for current, dirs, files in os.walk(event, followlinks=False, onerror=walk_error):
                     directory = Path(current)
                     for name in dirs + files:
                         path = directory / name
@@ -629,12 +663,13 @@ def organize_decrypted_events(root: Path):
                     if path.is_symlink() or file_identity(path.stat()) != identity:
                         raise ValueError("event changed during validation")
                 destination.mkdir(exist_ok=True)
+                stage = "move"
                 rename_directory_exclusive(event, target)
                 moved += 1
                 print(f"Event moved: {str(event.relative_to(root))!r} -> {str(target.relative_to(root))!r}; metadata retained")
             except (OSError, ValueError) as exc:
                 retained += 1
-                print(f"Event retained: {str(event.relative_to(root))!r}; encrypted, invalid, changed or unavailable ({type(exc).__name__})")
+                print(f"Event retained: {str(event.relative_to(root))!r}; {stage} failed: {exc}")
     print(f"Organized: {moved} events moved · {retained} retained · {conflicts} conflicts. Scan again to refresh counts.")
     return moved, retained, conflicts
 
