@@ -24,6 +24,7 @@ Getting your auth token:
 """
 
 from collections import deque
+from contextlib import contextmanager
 import argparse
 import base64
 import hashlib
@@ -40,12 +41,14 @@ from pathlib import Path
 
 import requests
 from Crypto.Cipher import AES
+from Crypto.Util.strxor import strxor
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 TESLA_API_BASE    = "https://dashcam.tesla.com"
 DECRYPT_BATCH_URL = f"{TESLA_API_BASE}/api/1/decrypt/batch"
 
+IO_BATCH_SIZE     = 1024 * 1024   # bounded, page-aligned sequential I/O
 CHUNK_SIZE        = 4096          # bytes of ciphertext per chunk
 HEADER_SIZE       = 16            # IV prepended to synthetic fixture chunks
 FULL_CHUNK        = CHUNK_SIZE + HEADER_SIZE  # 4112 bytes total
@@ -243,33 +246,33 @@ def _decrypt_real_file(src: Path, dst: Path, key_bytes: bytes, *, target_size=No
     if target_size is None:
         target_size = _read_real_plaintext_size(src)
     root_iv = hashlib.md5(key_bytes).digest()
+    cipher = AES.new(key_bytes, AES.MODE_ECB)
     written = 0
-
-    with open(src, "rb") as fin, open(dst, "wb") as fout:
+    page = 0
+    # CBC decryption is ECB(ciphertext) XOR the preceding ciphertext block.
+    # Every 4096-byte page resets that preceding block to its own derived IV.
+    # One bulk AES call handles up to 256 pages; page boundaries stay unchanged.
+    with open(src, "rb", buffering=IO_BATCH_SIZE) as fin, open(dst, "wb", buffering=IO_BATCH_SIZE) as fout:
         fin.seek(REAL_CIPHERTEXT_OFFSET)
-        page = 0
         while written < target_size:
-            encrypted_page = fin.read(CHUNK_SIZE)
-            if not encrypted_page:
-                break
-            if len(encrypted_page) != CHUNK_SIZE:
-                raise ValueError(f"Encrypted page is not 4096 bytes: {src}")
-
-            iv_material = bytearray(32)
-            iv_material[:len(root_iv)] = root_iv
-            page_bytes = str(page).encode("ascii")
-            iv_material[len(root_iv):len(root_iv) + len(page_bytes)] = page_bytes
-            derived_iv = hashlib.md5(iv_material).digest()
-
-            plaintext = AES.new(key_bytes, AES.MODE_CBC, derived_iv).decrypt(encrypted_page)
             remaining = target_size - written
-            if remaining < len(plaintext):
-                plaintext = plaintext[:remaining]
-            if page == 0:
+            needed = min(IO_BATCH_SIZE, ((remaining + CHUNK_SIZE - 1) // CHUNK_SIZE) * CHUNK_SIZE)
+            encrypted = fin.read(needed)
+            if len(encrypted) != needed:
+                raise ValueError("Encrypted payload is truncated")
+            blocks = cipher.decrypt(encrypted)
+            plaintext = bytearray(len(encrypted))
+            for offset in range(0, len(encrypted), CHUNK_SIZE):
+                material = (root_iv + str(page).encode("ascii")).ljust(32, b"\0")
+                iv = hashlib.md5(material).digest()
+                previous = iv + encrypted[offset:offset + CHUNK_SIZE - 16]
+                plaintext[offset:offset + CHUNK_SIZE] = strxor(blocks[offset:offset + CHUNK_SIZE], previous)
+                page += 1
+            if written == 0:
                 check_ftyp(plaintext)
-            fout.write(plaintext)
-            written += len(plaintext)
-            page += 1
+            length = min(remaining, len(plaintext))
+            fout.write(memoryview(plaintext)[:length])
+            written += length
 
     if written != target_size:
         raise ValueError(f"Decrypted output shorter than expected: {src}")
@@ -378,7 +381,17 @@ def inspect_source(src, expected_header=None, expected_identity=None):
     return before, size
 
 
-def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None, *, expected_header=None, expected_identity=None) -> int:
+@contextmanager
+def timed_stage(metrics, stage):
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        if metrics is not None:
+            metrics[stage] = metrics.get(stage, 0.0) + time.perf_counter() - started
+
+
+def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None, *, expected_header=None, expected_identity=None, metrics=None) -> int:
     """Publish validated plaintext atomically without overwriting existing files."""
     before, target_size = inspect_source(src, expected_header, expected_identity)
     if any(p.is_symlink() for p in (dst, *dst.parents)):
@@ -395,8 +408,10 @@ def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None,
     tmp = Path(name)
     remux_tmp = None
     try:
-        written = _decrypt_real_file(src, tmp, key, target_size=target_size)
-        validate_mp4(tmp)
+        with timed_stage(metrics, "decrypt_io"):
+            written = _decrypt_real_file(src, tmp, key, target_size=target_size)
+        with timed_stage(metrics, "validation"):
+            validate_mp4(tmp)
         if remux:
             fd, name = tempfile.mkstemp(prefix=".tesla-remux-", suffix=".mp4", dir=dst.parent)
             os.close(fd)
@@ -406,7 +421,7 @@ def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None,
             tmp.unlink()
             tmp = remux_tmp
         os.chmod(tmp, 0o600)
-        with tmp.open("rb") as f:
+        with timed_stage(metrics, "flush"), tmp.open("rb") as f:
             os.fsync(f.fileno())
         # APFS/ext4 support atomic, no-clobber hardlinks. Unsupported output
         # filesystems fail safely; encrypted sources are always untouched.
@@ -440,7 +455,7 @@ def collision_safe_batches(items, size):
         yield batch
 
 
-def safe_replace(src: Path, key: bytes, expected_header=None, *, expected_identity=None) -> int:
+def safe_replace(src: Path, key: bytes, expected_header=None, *, expected_identity=None, metrics=None) -> int:
     """Validate a same-directory temporary MP4 before replacing its source.
 
     Does not require hardlinks (unlike separate-output publishing), and does
@@ -453,9 +468,11 @@ def safe_replace(src: Path, key: bytes, expected_header=None, *, expected_identi
     os.close(fd)
     tmp = Path(name)
     try:
-        written = _decrypt_real_file(src, tmp, key, target_size=target_size)
-        validate_mp4(tmp)
-        with tmp.open("rb") as output:
+        with timed_stage(metrics, "decrypt_io"):
+            written = _decrypt_real_file(src, tmp, key, target_size=target_size)
+        with timed_stage(metrics, "validation"):
+            validate_mp4(tmp)
+        with timed_stage(metrics, "flush"), tmp.open("rb") as output:
             os.fsync(output.fileno())
         current = src.stat()
         if src.is_symlink() or file_identity(current) != file_identity(before):
@@ -472,16 +489,17 @@ def find_encrypted_files(root: Path, progress=None) -> list[Path]:
     """Discover regular MP4s without following directory/file symlinks."""
     found = []
     reported = time.monotonic()
-    def failed(exc):
-        raise exc
-    for parent, directories, files in os.walk(root, followlinks=False, onerror=failed):
-        directories[:] = sorted(d for d in directories if not d.startswith(".") and not (Path(parent) / d).is_symlink())
-        for name in sorted(files):
-            if name.startswith("._"):
-                continue
-            path = Path(parent) / name
-            if path.suffix.lower() == ".mp4" and not path.is_symlink() and path.is_file():
-                found.append(path)
+    folders = [root]
+    while folders:
+        parent = folders.pop()
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    folders.append(Path(entry.path))
+                elif entry.name.lower().endswith(".mp4") and entry.is_file(follow_symlinks=False):
+                    found.append(Path(entry.path))
         if progress is not None and time.monotonic() - reported >= 0.5:
             progress(len(found))
             reported = time.monotonic()
@@ -583,10 +601,19 @@ def main(argv=None, *, scan_plan=None, on_scan=None):
             dst = src if args.replace_originals else output / rel
             try:
                 before = src.stat()
-                with src.open("rb") as f:
-                    probe = f.read(WRAPPED_KEY_OFFSET + WRAPPED_KEY_SIZE)
+                # Classification only: already-plain inputs are never written.
+                # Read their ftyp box, without seeking through all MP4 boxes.
+                with src.open("rb", buffering=0) as f:
+                    probe = f.read(16)
+                    if probe[4:8] == b"ftyp":
+                        box_size = struct.unpack(">I", probe[:4])[0]
+                        if box_size < 16 or box_size > CHUNK_SIZE or box_size > before.st_size:
+                            raise ValueError("Invalid MP4 ftyp box")
+                        probe += f.read(box_size - len(probe))
+                        check_ftyp(probe)
+                    else:
+                        probe += f.read(WRAPPED_KEY_OFFSET + WRAPPED_KEY_SIZE - len(probe))
                 if probe[4:8] == b"ftyp":
-                    validate_mp4(src)
                     counts["plaintext"] += 1
                     continue
                 if not _has_extended_header(src, probe=probe):
@@ -643,6 +670,11 @@ def main(argv=None, *, scan_plan=None, on_scan=None):
         print("Replacement mode: validated plaintext will replace encrypted clips; no encrypted backup is kept.")
     print("Footage stays local. Tesla receives clip ID, VIN, key ID, timestamp, wrapped key and public key.")
     work_total = len(items)
+    metrics = {}
+    started = time.perf_counter()
+    def performance_report():
+        stages = " · ".join(f"{name} {metrics.get(name, 0.0):.1f}s" for name in ("keys", "decrypt_io", "validation", "flush"))
+        print(f"Timing (cumulative): elapsed {time.perf_counter() - started:.1f}s · {stages}")
     def work_progress():
         print("Work:", {**counts, "processed": work_total - counts["pending"], "total": work_total})
     print(f"Decrypting {work_total} clips from the completed scan…")
@@ -653,7 +685,8 @@ def main(argv=None, *, scan_plan=None, on_scan=None):
     try:
         for batch in collision_safe_batches(items, args.batch_size):
             try:
-                keys = fetch_keys_batch(session, [h for h, _, _ in batch])
+                with timed_stage(metrics, "keys"):
+                    keys = fetch_keys_batch(session, [h for h, _, _ in batch])
             except APIStatusError as exc:
                 if exc.status in (401, 403):
                     print("Tesla declined authentication/authorization. Stopped key requests; sign in again before retrying.")
@@ -684,19 +717,22 @@ def main(argv=None, *, scan_plan=None, on_scan=None):
                 try:
                     # No persistent key cache. All outputs start as private temps.
                     if args.replace_originals:
-                        safe_replace(src, key, expected_header=header, expected_identity=identities[str(src.relative_to(root))])
+                        safe_replace(src, key, expected_header=header, expected_identity=identities[str(src.relative_to(root))], metrics=metrics)
                         counts["replaced"] += 1
                     else:
-                        safe_output(src, dst, key, args.remux, output, expected_header=header, expected_identity=identities[str(src.relative_to(root))])
+                        safe_output(src, dst, key, args.remux, output, expected_header=header, expected_identity=identities[str(src.relative_to(root))], metrics=metrics)
                     counts["decrypted"] += 1
                     print(f"Decrypted {str(src.relative_to(root))!r}")
                 except (OSError, ValueError, subprocess.SubprocessError):
                     counts["failed"] += 1
                     print(f"Decryption/validation failed for {str(src.relative_to(root))!r}; no output published")
                 work_progress()
+                if (work_total - counts["pending"]) % 20 == 0:
+                    performance_report()
     finally:
         session.headers.pop("Authorization", None)
         session.close()
+    performance_report()
     print("Results:", counts)
     return 1 if counts["failed"] else 0
 
