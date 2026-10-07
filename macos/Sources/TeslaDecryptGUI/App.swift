@@ -36,6 +36,7 @@ struct ContentView: View {
     @ObservedObject var model: DecryptModel
     @State private var showSignIn = false
     @State private var confirmReplacement = false
+    @State private var followResults = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -105,10 +106,22 @@ struct ContentView: View {
             }
             if model.busy { ProgressView(value: model.fraction).progressViewStyle(.linear) }
             Text(model.status).font(.callout).textSelection(.enabled)
-            ScrollView {
-                Text(model.log.joined(separator: "\n")).font(.system(.caption, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+            if !model.workSummary.isEmpty { Text(model.workSummary).font(.callout).foregroundStyle(.secondary) }
+            Toggle("Follow latest results", isOn: $followResults).font(.caption)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(model.log.joined(separator: "\n")).font(.system(.caption, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    Color.clear.frame(height: 1).id("latestResult")
+                }
+                .onChange(of: model.log.last) { _ in
+                    if followResults { proxy.scrollTo("latestResult", anchor: .bottom) }
+                }
+                .onChange(of: followResults) { enabled in
+                    if enabled { proxy.scrollTo("latestResult", anchor: .bottom) }
+                }
             }.frame(maxHeight: .infinity)
+
             Text(model.replaceOriginals
                  ? "Keep a separate backup if you need the encrypted originals. Safely eject the USB when finished."
                  : "Original clips are read only. Use an APFS destination. Keep originals until playback is checked.")

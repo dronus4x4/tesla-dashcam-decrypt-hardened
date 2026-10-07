@@ -35,7 +35,7 @@ class GUIBridgeTests(unittest.TestCase):
             events = [json.loads(line) for line in result.stdout.splitlines()]
             scan = next(event for event in events if event["kind"] == "scan")
             self.assertEqual(scan["counts"]["pending"], 1)
-            self.assertTrue(any(event.get("message") == "Checking clips: 1 of 1" for event in events))
+            self.assertTrue(any(event["kind"] == "scan_progress" and event["completed"] == 1 and event["total"] == 1 for event in events))
             self.assertFalse((root / "output").exists())
 
     def test_invalid_token_never_echoed(self):
@@ -61,6 +61,27 @@ class GUIBridgeTests(unittest.TestCase):
             self.assertEqual(bridge.main(), 0)
         self.assertNotIn(token, output.getvalue())
         self.assertEqual(json.loads(output.getvalue().splitlines()[0])["kind"], "summary")
+
+    def test_completed_scan_passes_separately_from_token_and_reports_work(self):
+        bridge = load_bridge("gui_bridge_scan_plan")
+        import io
+        token = "dummy-secret-for-plan-test"
+        plan = {"version": 1, "items": [{"relative": "clip.mp4"}]}
+        payload = json.dumps({"token":token}) + "\n" + json.dumps(plan) + "\n"
+        stdin = io.TextIOWrapper(io.BytesIO(payload.encode()))
+        output = io.StringIO()
+        def run(argv, *, scan_plan):
+            self.assertEqual(scan_plan, plan)
+            self.assertEqual(bridge.engine.prompt_token(),token)
+            print("Work: {'processed': 1, 'total': 2, 'pending': 1, 'failed': 0}")
+            return 0
+        with patch.object(bridge.sys, "stdin", stdin), patch.object(bridge.sys,"stdout", output), patch.object(bridge.sys,"__stdout__", output), patch.object(bridge.sys,"argv", ['bridge','input','--replace-originals']), patch.object(bridge.engine,'main',side_effect=run), patch.object(bridge.engine,'prompt_token'), patch.object(bridge.signal,'signal'):
+            self.assertEqual(bridge.main(),0)
+        self.assertNotIn(token,output.getvalue())
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        work = next(event for event in events if event['kind'] == 'work')
+        self.assertEqual(work['counts']['pending'],1)
+        self.assertEqual(work['counts']['processed'],1)
 
     def test_cancel_signal_raises_cleanup_exception(self):
         bridge = load_bridge("gui_bridge_cancel")

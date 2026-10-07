@@ -23,6 +23,7 @@ Getting your auth token:
   - Or: DevTools → Network → any /api/ request → Headers → Authorization: Bearer <TOKEN>
 """
 
+from collections import deque
 import argparse
 import base64
 import hashlib
@@ -185,6 +186,12 @@ def _api_item_from_header(header: dict | str) -> dict:
     return {"id": header["id"]}
 
 
+class APIStatusError(RuntimeError):
+    def __init__(self, status):
+        self.status = status
+        super().__init__(f"Tesla API returned HTTP {status}")
+
+
 def fetch_keys_batch(session: requests.Session, file_headers: list[dict] | list[str]) -> dict[str, bytes]:
     """
     POST to /api/1/decrypt/batch with file UUIDs and ownership metadata.
@@ -203,7 +210,7 @@ def fetch_keys_batch(session: requests.Session, file_headers: list[dict] | list[
         break
     if resp.status_code != 200:
         # Do not display response bodies, which may contain sensitive metadata.
-        raise RuntimeError(f'Tesla API returned HTTP {resp.status_code}')
+        raise APIStatusError(resp.status_code)
 
     data = resp.json()
     keys = {}
@@ -226,14 +233,15 @@ def fetch_keys_batch(session: requests.Session, file_headers: list[dict] | list[
 
 # ── Decryption ─────────────────────────────────────────────────────────────────
 
-def _decrypt_real_file(src: Path, dst: Path, key_bytes: bytes) -> int:
+def _decrypt_real_file(src: Path, dst: Path, key_bytes: bytes, *, target_size=None) -> int:
     """
     Decrypt a real Tesla 2026.20 encrypted clip.
 
     Tesla's browser decrypts the payload as 4096-byte eCryptfs pages. Each page
     uses AES-CBC with IV = md5(md5(file_key) + ascii(page_number) + zero padding).
     """
-    target_size = _read_real_plaintext_size(src)
+    if target_size is None:
+        target_size = _read_real_plaintext_size(src)
     root_iv = hashlib.md5(key_bytes).digest()
     written = 0
 
@@ -345,8 +353,36 @@ def private_directory(path: Path) -> None:
         raise ValueError("Output path is not a directory")
 
 
-def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None) -> int:
+def file_identity(st):
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def inspect_source(src, expected_header=None, expected_identity=None):
+    """Check only the pending source immediately before writing any output."""
+    if any(p.is_symlink() for p in (src, *src.parents)) or not src.is_file():
+        raise ValueError("Source must be a regular file without symlink ancestors")
+    before = src.stat()
+    if expected_identity is not None and file_identity(before) != tuple(expected_identity):
+        raise ValueError("Source changed after scanning; scan again")
+    with src.open("rb") as f:
+        probe = f.read(WRAPPED_KEY_OFFSET + WRAPPED_KEY_SIZE)
+    if not _has_extended_header(src, probe=probe):
+        raise ValueError("Source is no longer an encrypted clip; scan again")
+    header = read_file_header(src, probe=probe)
+    if expected_header is not None and header != expected_header:
+        raise ValueError("Source header changed after scanning; scan again")
+    size = _read_real_plaintext_size(src, probe=probe)
+    needed = REAL_CIPHERTEXT_OFFSET + ((size + CHUNK_SIZE - 1) // CHUNK_SIZE) * CHUNK_SIZE
+    if before.st_size < needed:
+        raise ValueError("Truncated encrypted payload")
+    return before, size
+
+
+def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None, *, expected_header=None, expected_identity=None) -> int:
     """Publish validated plaintext atomically without overwriting existing files."""
+    before, target_size = inspect_source(src, expected_header, expected_identity)
+    if any(p.is_symlink() for p in (dst, *dst.parents)):
+        raise ValueError("Destination contains a symlink")
     private_directory(dst.parent)
     current = dst.parent
     while True:
@@ -359,7 +395,7 @@ def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None)
     tmp = Path(name)
     remux_tmp = None
     try:
-        written = _decrypt_real_file(src, tmp, key)
+        written = _decrypt_real_file(src, tmp, key, target_size=target_size)
         validate_mp4(tmp)
         if remux:
             fd, name = tempfile.mkstemp(prefix=".tesla-remux-", suffix=".mp4", dir=dst.parent)
@@ -374,6 +410,8 @@ def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None)
             os.fsync(f.fileno())
         # APFS/ext4 support atomic, no-clobber hardlinks. Unsupported output
         # filesystems fail safely; encrypted sources are always untouched.
+        if src.is_symlink() or file_identity(src.stat()) != file_identity(before):
+            raise ValueError("Source changed during decryption; scan again")
         os.link(tmp, dst)
         return written
     finally:
@@ -383,43 +421,44 @@ def safe_output(src: Path, dst: Path, key: bytes, remux=False, output_root=None)
 
 
 def collision_safe_batches(items, size):
-    batch, seen = [], set()
+    # Fill requests from distinct ID queues rather than ending a request at
+    # every duplicate. Keep each response unambiguous without extra API calls.
+    if not 1 <= size <= 100:
+        raise ValueError("Invalid batch size")
+    groups = {}
     for item in items:
-        uid = item[0]["id"]
-        if len(batch) == size or uid in seen:
-            yield batch
-            batch, seen = [], set()
-        batch.append(item)
-        seen.add(uid)
-    if batch:
+        groups.setdefault(item[0]["id"], deque()).append(item)
+    active = deque(groups.values())
+    while active:
+        batch, reusable = [], []
+        for _ in range(min(size, len(active))):
+            group = active.popleft()
+            batch.append(group.popleft())
+            if group:
+                reusable.append(group)
+        active.extend(reusable)
         yield batch
 
 
-def safe_replace(src: Path, key: bytes, expected_header=None) -> int:
+def safe_replace(src: Path, key: bytes, expected_header=None, *, expected_identity=None) -> int:
     """Validate a same-directory temporary MP4 before replacing its source.
 
     Does not require hardlinks (unlike separate-output publishing), and does
     not chmod source directories. Power-loss guarantees depend on the USB FS.
     """
-    if src.is_symlink() or not src.is_file():
-        raise ValueError("Source must be a regular file")
-    before = src.stat()
-    if expected_header is not None and read_file_header(src) != expected_header:
-        raise ValueError("Source header changed after scanning; scan again")
-    target_size = _read_real_plaintext_size(src)
+    before, target_size = inspect_source(src, expected_header, expected_identity)
     if shutil.disk_usage(src.parent).free < target_size:
         raise ValueError("USB needs enough free space for one decrypted clip")
     fd, name = tempfile.mkstemp(prefix=".tesla-", suffix=".mp4", dir=src.parent)
     os.close(fd)
     tmp = Path(name)
     try:
-        written = _decrypt_real_file(src, tmp, key)
+        written = _decrypt_real_file(src, tmp, key, target_size=target_size)
         validate_mp4(tmp)
         with tmp.open("rb") as output:
             os.fsync(output.fileno())
         current = src.stat()
-        identity = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
-        if src.is_symlink() or identity(current) != identity(before):
+        if src.is_symlink() or file_identity(current) != file_identity(before):
             raise ValueError("Source changed during decryption; scan again")
         os.utime(tmp, ns=(before.st_atime_ns, before.st_mtime_ns))
         # Single same-filesystem replacement: originals are never unlinked first.
@@ -462,7 +501,44 @@ def prompt_token():
     return token
 
 
-def main(argv=None):
+def restore_scan_plan(plan, root, output, replace, remux):
+    """Use a session-only plan, refusing different folders/modes or unsafe paths."""
+    if not isinstance(plan, dict) or plan.get("version") != 1:
+        raise ValueError("Invalid completed scan; scan again")
+    if (plan.get("root") != str(root) or plan.get("output") != (str(output) if output else None)
+            or plan.get("replace") is not replace or plan.get("remux") is not remux
+            or plan.get("root_identity") != [root.stat().st_dev, root.stat().st_ino]):
+        raise ValueError("Folder, drive or mode changed; scan again")
+    counts = plan.get("counts")
+    fields = {"examined", "encrypted", "plaintext", "existing", "keys", "decrypted", "replaced", "failed", "pending"}
+    entries = plan.get("items")
+    if (not isinstance(counts, dict) or set(counts) != fields
+            or any(type(v) is not int or v < 0 for v in counts.values())
+            or not isinstance(entries, list) or len(entries) != counts["pending"]
+            or counts["pending"] > counts["encrypted"]):
+        raise ValueError("Invalid completed scan counts")
+    items, identities = [], {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("Invalid scan item")
+        relative = entry.get("relative")
+        if not isinstance(relative, str):
+            raise ValueError("Invalid scan path")
+        rel = Path(relative)
+        if rel.is_absolute() or not rel.parts or ".." in rel.parts or str(rel) != relative or rel.suffix.lower() != ".mp4" or relative in identities:
+            raise ValueError("Unsafe scan path")
+        header, identity = entry.get("header"), entry.get("identity")
+        if (not isinstance(header, dict) or set(header) != {"id", "vin", "key_id", "timestamp", "wrapped_key", "public_key"}
+                or not isinstance(header["id"], str) or not isinstance(identity, list) or len(identity) != 4
+                or any(type(v) is not int for v in identity)):
+            raise ValueError("Invalid scan metadata")
+        src = root / rel
+        items.append((header, src, src if replace else output / rel))
+        identities[relative] = identity
+    return counts.copy(), items, identities
+
+
+def main(argv=None, *, scan_plan=None, on_scan=None):
     parser = argparse.ArgumentParser(description="Decrypt Tesla clips locally with safe outputs")
     parser.add_argument("input_dir", type=Path)
     parser.add_argument("output_dir", type=Path, nargs="?")
@@ -491,61 +567,86 @@ def main(argv=None):
         output = output.resolve()
         if output == root or output in root.parents or root in output.parents:
             parser.error("input and output directory trees must not overlap")
-    counts = dict(examined=0, encrypted=0, plaintext=0, existing=0,
-                  keys=0, decrypted=0, replaced=0, failed=0, pending=0)
-    items = []
-    print("Finding MP4 clips…")
-    all_files = find_encrypted_files(root, progress=lambda n: print(f"Finding MP4 clips… {n} found"))
-    total = len(all_files)
-    reported = time.monotonic()
-    print(f"Checking clips: 0 of {total}")
-    for src in all_files:
-        counts["examined"] += 1
-        rel = src.relative_to(root)
-        dst = src if args.replace_originals else output / rel
-        try:
-            with src.open("rb") as f:
-                probe = f.read(WRAPPED_KEY_OFFSET + WRAPPED_KEY_SIZE)
-            if probe[4:8] == b"ftyp":
-                validate_mp4(src)
-                counts["plaintext"] += 1
-                continue
-            if not _has_extended_header(src, probe=probe):
-                raise ValueError("Unsupported or malformed encrypted container")
-            size = _read_real_plaintext_size(src, probe=probe)
-            needed = REAL_CIPHERTEXT_OFFSET + ((size + CHUNK_SIZE - 1) // CHUNK_SIZE) * CHUNK_SIZE
-            if src.stat().st_size < needed:
-                raise ValueError("Truncated encrypted payload")
-            header = read_file_header(src, probe=probe)
-            counts["encrypted"] += 1
-            if args.replace_originals:
-                items.append((header, src, src))
-                continue
-            if any(p.is_symlink() for p in (dst, *dst.parents)):
-                raise ValueError("Destination contains a symlink")
-            if dst.exists():
-                if not dst.is_file():
-                    raise ValueError("Destination is not a regular file")
-                validate_mp4(dst)
-                if not args.remux and dst.stat().st_size != size:
-                    raise ValueError("Existing output has wrong size; move it aside to retry")
-                counts["existing"] += 1
-                continue
-            items.append((header, src, dst))
-        except (OSError, ValueError) as exc:
-            print(f"Failed {str(rel)!r}: {exc}")
-            counts["failed"] += 1
-        finally:
-            if counts["examined"] == total or time.monotonic() - reported >= 0.5:
-                print(f"Checking clips: {counts['examined']} of {total}")
-                reported = time.monotonic()
-    counts["pending"] = len(items)
+    if scan_plan is None:
+        counts = dict(examined=0, encrypted=0, plaintext=0, existing=0,
+                      keys=0, decrypted=0, replaced=0, failed=0, pending=0)
+        items = []
+        identities = {}
+        print("Finding MP4 clips…")
+        all_files = find_encrypted_files(root, progress=lambda n: print(f"Finding MP4 clips… {n} found"))
+        total = len(all_files)
+        reported = time.monotonic()
+        print(f"Checking clips: 0 of {total}")
+        for src in all_files:
+            counts["examined"] += 1
+            rel = src.relative_to(root)
+            dst = src if args.replace_originals else output / rel
+            try:
+                before = src.stat()
+                with src.open("rb") as f:
+                    probe = f.read(WRAPPED_KEY_OFFSET + WRAPPED_KEY_SIZE)
+                if probe[4:8] == b"ftyp":
+                    validate_mp4(src)
+                    counts["plaintext"] += 1
+                    continue
+                if not _has_extended_header(src, probe=probe):
+                    raise ValueError("Unsupported or malformed encrypted container")
+                size = _read_real_plaintext_size(src, probe=probe)
+                needed = REAL_CIPHERTEXT_OFFSET + ((size + CHUNK_SIZE - 1) // CHUNK_SIZE) * CHUNK_SIZE
+                if before.st_size < needed:
+                    raise ValueError("Truncated encrypted payload")
+                header = read_file_header(src, probe=probe)
+                if file_identity(src.stat()) != file_identity(before):
+                    raise ValueError("Source changed while scanning")
+                identities[str(rel)] = list(file_identity(before))
+                counts["encrypted"] += 1
+                if args.replace_originals:
+                    items.append((header, src, src))
+                    continue
+                if any(p.is_symlink() for p in (dst, *dst.parents)):
+                    raise ValueError("Destination contains a symlink")
+                if dst.exists():
+                    if not dst.is_file():
+                        raise ValueError("Destination is not a regular file")
+                    validate_mp4(dst)
+                    if not args.remux and dst.stat().st_size != size:
+                        raise ValueError("Existing output has wrong size; move it aside to retry")
+                    counts["existing"] += 1
+                    continue
+                items.append((header, src, dst))
+            except (OSError, ValueError) as exc:
+                print(f"Failed {str(rel)!r}: {exc}")
+                counts["failed"] += 1
+            finally:
+                if counts["examined"] == total or time.monotonic() - reported >= 0.5:
+                    print(f"Checking clips: {counts['examined']} of {total}")
+                    reported = time.monotonic()
+        counts["pending"] = len(items)
+        plan = {
+            "version": 1, "root": str(root), "output": str(output) if output else None,
+            "replace": args.replace_originals, "remux": args.remux,
+            "root_identity": [root.stat().st_dev, root.stat().st_ino],
+            "counts": counts.copy(),
+            "items": [{"relative": str(src.relative_to(root)), "header": header,
+                       "identity": identities[str(src.relative_to(root))]}
+                      for header, src, _ in items],
+        }
+        if on_scan is not None:
+            on_scan(plan)
+    else:
+        counts, items, identities = restore_scan_plan(scan_plan, root, output, args.replace_originals, args.remux)
+        print(f"Using completed scan: {len(items)} encrypted clips; readable files are not rescanned.")
     print("Scan:", counts)
     if args.dry_run or not items:
         return 1 if counts["failed"] else 0
     if args.replace_originals:
         print("Replacement mode: validated plaintext will replace encrypted clips; no encrypted backup is kept.")
     print("Footage stays local. Tesla receives clip ID, VIN, key ID, timestamp, wrapped key and public key.")
+    work_total = len(items)
+    def work_progress():
+        print("Work:", {**counts, "processed": work_total - counts["pending"], "total": work_total})
+    print(f"Decrypting {work_total} clips from the completed scan…")
+    work_progress()
     token = prompt_token()
     session = get_session(token)
     del token
@@ -553,10 +654,23 @@ def main(argv=None):
         for batch in collision_safe_batches(items, args.batch_size):
             try:
                 keys = fetch_keys_batch(session, [h for h, _, _ in batch])
-            except (requests.RequestException, RuntimeError, ValueError, KeyError, TypeError):
-                print("Key request failed; this batch was not decrypted. Check network/token and retry.")
+            except APIStatusError as exc:
+                if exc.status in (401, 403):
+                    print("Tesla declined authentication/authorization. Stopped key requests; sign in again before retrying.")
+                    counts["failed"] += counts["pending"]
+                    counts["pending"] = 0
+                    work_progress()
+                    break
+                print(f"Key request failed for {len(batch)} clips; check network/token and retry.")
                 counts["failed"] += len(batch)
                 counts["pending"] -= len(batch)
+                work_progress()
+                continue
+            except (requests.RequestException, RuntimeError, ValueError, KeyError, TypeError):
+                print(f"Key request failed for {len(batch)} clips; check network/token and retry.")
+                counts["failed"] += len(batch)
+                counts["pending"] -= len(batch)
+                work_progress()
                 continue
             for header, src, dst in batch:
                 counts["pending"] -= 1
@@ -564,20 +678,22 @@ def main(argv=None):
                 if key is None:
                     counts["failed"] += 1
                     print(f"No key returned for {str(src.relative_to(root))!r}")
+                    work_progress()
                     continue
                 counts["keys"] += 1
                 try:
                     # No persistent key cache. All outputs start as private temps.
                     if args.replace_originals:
-                        safe_replace(src, key, expected_header=header)
+                        safe_replace(src, key, expected_header=header, expected_identity=identities[str(src.relative_to(root))])
                         counts["replaced"] += 1
                     else:
-                        safe_output(src, dst, key, args.remux, output)
+                        safe_output(src, dst, key, args.remux, output, expected_header=header, expected_identity=identities[str(src.relative_to(root))])
                     counts["decrypted"] += 1
                     print(f"Decrypted {str(src.relative_to(root))!r}")
                 except (OSError, ValueError, subprocess.SubprocessError):
                     counts["failed"] += 1
                     print(f"Decryption/validation failed for {str(src.relative_to(root))!r}; no output published")
+                work_progress()
     finally:
         session.headers.pop("Authorization", None)
         session.close()

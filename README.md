@@ -86,3 +86,5 @@ Upstream README declares `MIT`. Upstream provides no separate LICENSE file or fu
 ## iPhone and iPad beta
 
 [Sentry USB Unlock 0.1.0 (build 1)](ios/README.md) provides a native Swift iOS project, USB folder selection, copy/replacement modes and TestFlight setup instructions. Device and live sign-in testing remain required.
+
+The Mac GUI reuses its session-only completed scan for decryption, checks each pending source for changes before writing, reports processed/remaining counts and offers optional automatic results scrolling. Requests with duplicate clip IDs are filled from distinct-ID queues to avoid prematurely small batches. Authentication rejection stops further requests. The CLI continues to scan on each independent invocation; no disk inventory/token cache is introduced.

@@ -28,6 +28,11 @@ class Progress(io.TextIOBase):
             if line.startswith(("Scan: ", "Results: ")):
                 counts = ast.literal_eval(line.split(": ", 1)[1])
                 event("scan" if line.startswith("Scan:") else "summary", counts=counts)
+            elif line.startswith("Work: "):
+                event("work", counts=ast.literal_eval(line.split(": ", 1)[1]))
+            elif line.startswith("Checking clips: "):
+                completed, total = line.split(": ", 1)[1].split(" of ")
+                event("scan_progress", completed=int(completed), total=int(total))
             elif line:
                 event("progress", message=line)
         return len(text)
@@ -43,6 +48,8 @@ def interrupt(_signal, _frame):
 def main():
     signal.signal(signal.SIGTERM, interrupt)
     token = ""
+    plan = None
+    scanning = "--scan" in sys.argv[1:]
     if "--scan" not in sys.argv[1:]:
         # The native app closes the pipe after one message. Bound its size.
         message = sys.stdin.buffer.readline(16385)
@@ -55,10 +62,22 @@ def main():
         if not token or any(ord(c) < 33 or ord(c) > 126 for c in token):
             raise ValueError("Invalid token format")
         del message, payload
+        # Separate bounded line: credential size limit is independent of inventory.
+        plan_message = sys.stdin.buffer.readline(64 * 1024 * 1024 + 1)
+        if len(plan_message) > 64 * 1024 * 1024:
+            raise ValueError("Completed scan is too large; choose a smaller folder")
+        if plan_message.strip():
+            plan = json.loads(plan_message)
+        del plan_message
         engine.prompt_token = lambda: token
     sys.stdout = Progress()
     try:
-        code = engine.main(sys.argv[1:])
+        if scanning:
+            code = engine.main(sys.argv[1:], on_scan=lambda value: event("plan", plan=value))
+        elif plan is not None:
+            code = engine.main(sys.argv[1:], scan_plan=plan)
+        else:
+            code = engine.main(sys.argv[1:])
         event("finished", code=code)
         return code
     finally:
