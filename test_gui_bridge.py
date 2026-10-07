@@ -33,8 +33,9 @@ class GUIBridgeTests(unittest.TestCase):
                                     input="", capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             events = [json.loads(line) for line in result.stdout.splitlines()]
-            self.assertEqual(events[0]["kind"], "scan")
-            self.assertEqual(events[0]["counts"]["pending"], 1)
+            scan = next(event for event in events if event["kind"] == "scan")
+            self.assertEqual(scan["counts"]["pending"], 1)
+            self.assertTrue(any(event.get("message") == "Checking clips: 1 of 1" for event in events))
             self.assertFalse((root / "output").exists())
 
     def test_invalid_token_never_echoed(self):

@@ -56,6 +56,14 @@ class HardeningTests(unittest.TestCase):
         fixture(system / 'ignored.mp4')
         self.assertEqual(d.find_encrypted_files(self.root), [self.src])
 
+    def test_cached_header_matches_file_parser_without_reopening(self):
+        probe = self.src.read_bytes()[:8192]
+        expected = d.read_file_header(self.src)
+        with patch('builtins.open', side_effect=AssertionError('unexpected file open')), patch.object(Path, 'open', side_effect=AssertionError('unexpected file open')):
+            self.assertEqual(d.read_file_header(self.src, probe=probe), expected)
+            self.assertTrue(d._has_extended_header(self.src, probe=probe))
+            self.assertEqual(d._read_real_plaintext_size(self.src, probe=probe), len(MP4))
+
     def test_real_page_roundtrip_and_permissions(self):
         original = self.src.read_bytes()
         self.assertEqual(d.safe_output(self.src, self.dst, KEY), len(MP4))

@@ -177,7 +177,7 @@ final class DecryptModel: ObservableObject {
                 handled += 1
                 fraction = min(1, Double(handled) / Double(max(1, initialPending)))
             }
-            if kind == "cancelled" || kind == "error" { status = message }
+            if kind == "cancelled" || kind == "error" || message.hasPrefix("Finding MP4 clips") || message.hasPrefix("Checking clips:") { status = message }
         }
     }
 }

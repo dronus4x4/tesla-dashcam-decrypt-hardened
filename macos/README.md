@@ -97,7 +97,7 @@ This is a local development app. The build script creates a Python virtual envir
 1. Plug in your Tesla USB/SSD.
 2. **Select Tesla drive**: choose the drive or its TeslaCam folder.
 3. Choose the output mode: leave **Replace encrypted clips on the USB** off and select a destination on your Mac, or turn it on to replace files on the selected drive.
-4. **Scan drive**: offline inventory; no token or network request.
+4. **Scan drive**: offline inventory; no token or network request. The status first shows files being found, then **Checking clips: X of Y**. Encrypted ownership metadata is read once per file. Readable clips still undergo MP4 structure checks; large folders and slow USB devices can take time.
 5. **Sign in with Tesla**: sign into Tesla's real Dashcam website in a temporary WebKit window. Select one encrypted clip there so the website makes its normal key request. The app observes the Bearer header on that exact decryption endpoint and keeps the token in memory.
 6. **Decrypt all**: batch processing, progress and results. **Stop decrypting** or **Command + .** requests cleanup; wait for the worker to exit before ejecting. Quitting waits for worker cleanup. USB replacement mode asks you to confirm the selected folder and clip count first.
 7. **Show destination** opens the output folder or selected drive. Safely eject the drive when finished.

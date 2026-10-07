@@ -83,14 +83,17 @@ def get_session(token: str) -> requests.Session:
     return s
 
 
-def read_file_uuid(path: Path) -> str:
+def read_file_uuid(path: Path, *, probe: bytes | None = None) -> str:
     """
     Read the 16-byte UUID from the encrypted file header and return
     it formatted as a lowercase hyphenated UUID string.
     """
-    with open(path, "rb") as f:
-        f.seek(UUID_OFFSET)
-        raw = f.read(16)
+    if probe is None:
+        with open(path, "rb") as f:
+            f.seek(UUID_OFFSET)
+            raw = f.read(16)
+    else:
+        raw = probe[UUID_OFFSET:UUID_OFFSET + 16]
     if len(raw) < 16:
         raise ValueError(f"File too short to contain UUID: {path}")
     # Interpret as UUID: 4-2-2-2-6 byte grouping (standard UUID layout)
@@ -102,10 +105,11 @@ def read_file_uuid(path: Path) -> str:
     return f"{a}-{b}-{c}-{d}-{e}"
 
 
-def _has_extended_header(path: Path) -> bool:
+def _has_extended_header(path: Path, *, probe: bytes | None = None) -> bool:
     """Return True for real Tesla files with the 0x1000 metadata block."""
-    with open(path, "rb") as f:
-        probe = f.read(EXTENDED_HEADER_OFFSET + 4)
+    if probe is None:
+        with open(path, "rb") as f:
+            probe = f.read(EXTENDED_HEADER_OFFSET + 4)
 
     if probe.startswith(b"TSLC"):
         return False
@@ -116,10 +120,13 @@ def _has_extended_header(path: Path) -> bool:
     return metadata_offset == EXTENDED_HEADER_OFFSET and probe[KEY_ID_OFFSET:KEY_ID_OFFSET + 4] != b"\x00" * 4
 
 
-def _read_real_plaintext_size(path: Path) -> int:
+def _read_real_plaintext_size(path: Path, *, probe: bytes | None = None) -> int:
     """Real Tesla files store the decrypted MP4 length as a big-endian uint64."""
-    with open(path, "rb") as f:
-        raw = f.read(8)
+    if probe is None:
+        with open(path, "rb") as f:
+            raw = f.read(8)
+    else:
+        raw = probe[:8]
     if len(raw) != 8:
         raise ValueError(f"File too short to contain plaintext size: {path}")
     size = struct.unpack(">Q", raw)[0]
@@ -128,29 +135,26 @@ def _read_real_plaintext_size(path: Path) -> int:
     return size
 
 
-def read_file_header(path: Path) -> dict:
+def read_file_header(path: Path, *, probe: bytes | None = None) -> dict:
     """
     Read all fields needed for the decrypt API from the file header.
     Returns dict with keys: id, vin, key_id, timestamp, wrapped_key, public_key.
     Synthetic TSLC fixtures only contain the id, so they return that field alone.
     """
-    file_id = read_file_uuid(path)
+    if probe is None:
+        with path.open("rb") as f:
+            probe = f.read(WRAPPED_KEY_OFFSET + WRAPPED_KEY_SIZE)
+    file_id = read_file_uuid(path, probe=probe)
     header = {"id": file_id}
 
-    if not _has_extended_header(path):
+    if not _has_extended_header(path, probe=probe):
         return header
 
-    with open(path, "rb") as f:
-        f.seek(KEY_ID_OFFSET)
-        key_id_raw = f.read(4)
-        f.seek(PUBLIC_KEY_OFFSET)
-        public_key_raw = f.read(PUBLIC_KEY_SIZE)
-        f.seek(VIN_OFFSET)
-        vin_raw = f.read(VIN_SIZE)
-        f.seek(TIMESTAMP_OFFSET)
-        timestamp_raw = f.read(TIMESTAMP_SIZE)
-        f.seek(WRAPPED_KEY_OFFSET)
-        wrapped_key_raw = f.read(WRAPPED_KEY_SIZE)
+    key_id_raw = probe[KEY_ID_OFFSET:KEY_ID_OFFSET + 4]
+    public_key_raw = probe[PUBLIC_KEY_OFFSET:PUBLIC_KEY_OFFSET + PUBLIC_KEY_SIZE]
+    vin_raw = probe[VIN_OFFSET:VIN_OFFSET + VIN_SIZE]
+    timestamp_raw = probe[TIMESTAMP_OFFSET:TIMESTAMP_OFFSET + TIMESTAMP_SIZE]
+    wrapped_key_raw = probe[WRAPPED_KEY_OFFSET:WRAPPED_KEY_OFFSET + WRAPPED_KEY_SIZE]
 
     if len(wrapped_key_raw) != WRAPPED_KEY_SIZE:
         raise ValueError(f"File too short to contain ownership metadata: {path}")
@@ -425,9 +429,10 @@ def safe_replace(src: Path, key: bytes, expected_header=None) -> int:
         tmp.unlink(missing_ok=True)
 
 
-def find_encrypted_files(root: Path) -> list[Path]:
+def find_encrypted_files(root: Path, progress=None) -> list[Path]:
     """Discover regular MP4s without following directory/file symlinks."""
     found = []
+    reported = time.monotonic()
     def failed(exc):
         raise exc
     for parent, directories, files in os.walk(root, followlinks=False, onerror=failed):
@@ -438,6 +443,9 @@ def find_encrypted_files(root: Path) -> list[Path]:
             path = Path(parent) / name
             if path.suffix.lower() == ".mp4" and not path.is_symlink() and path.is_file():
                 found.append(path)
+        if progress is not None and time.monotonic() - reported >= 0.5:
+            progress(len(found))
+            reported = time.monotonic()
     return sorted(found)
 
 
@@ -486,25 +494,29 @@ def main(argv=None):
     counts = dict(examined=0, encrypted=0, plaintext=0, existing=0,
                   keys=0, decrypted=0, replaced=0, failed=0, pending=0)
     items = []
-    all_files = find_encrypted_files(root)
+    print("Finding MP4 clips…")
+    all_files = find_encrypted_files(root, progress=lambda n: print(f"Finding MP4 clips… {n} found"))
+    total = len(all_files)
+    reported = time.monotonic()
+    print(f"Checking clips: 0 of {total}")
     for src in all_files:
         counts["examined"] += 1
         rel = src.relative_to(root)
         dst = src if args.replace_originals else output / rel
         try:
             with src.open("rb") as f:
-                probe = f.read(CHUNK_SIZE)
+                probe = f.read(WRAPPED_KEY_OFFSET + WRAPPED_KEY_SIZE)
             if probe[4:8] == b"ftyp":
                 validate_mp4(src)
                 counts["plaintext"] += 1
                 continue
-            if not _has_extended_header(src):
+            if not _has_extended_header(src, probe=probe):
                 raise ValueError("Unsupported or malformed encrypted container")
-            size = _read_real_plaintext_size(src)
+            size = _read_real_plaintext_size(src, probe=probe)
             needed = REAL_CIPHERTEXT_OFFSET + ((size + CHUNK_SIZE - 1) // CHUNK_SIZE) * CHUNK_SIZE
             if src.stat().st_size < needed:
                 raise ValueError("Truncated encrypted payload")
-            header = read_file_header(src)
+            header = read_file_header(src, probe=probe)
             counts["encrypted"] += 1
             if args.replace_originals:
                 items.append((header, src, src))
@@ -523,6 +535,10 @@ def main(argv=None):
         except (OSError, ValueError) as exc:
             print(f"Failed {str(rel)!r}: {exc}")
             counts["failed"] += 1
+        finally:
+            if counts["examined"] == total or time.monotonic() - reported >= 0.5:
+                print(f"Checking clips: {counts['examined']} of {total}")
+                reported = time.monotonic()
     counts["pending"] = len(items)
     print("Scan:", counts)
     if args.dry_run or not items:
